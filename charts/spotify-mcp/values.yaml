@@ -1,0 +1,51 @@
+image:
+  repository: ghcr.io/subpathdev/spotify-mcp
+  # Default: the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+config:
+  # Required. Must match a redirect URI in your Spotify app exactly, and be
+  # HTTPS (Spotify only allows plain HTTP for 127.0.0.1).
+  redirectURI: ""
+  # Base URL of invite links. Default: redirectURI without /callback.
+  publicURL: ""
+  profile: default
+
+# A Secret you create yourself, with the keys SPOTIFY_CLIENT_ID and
+# SPOTIFY_CLIENT_SECRET. The chart never creates it, so the secret never ends
+# up in Helm values or Git.
+existingSecret: spotify-mcp
+
+persistence:
+  # Holds the refresh token and the hashed invites. A few KB.
+  size: 16Mi
+  # Empty: the cluster's default storage class.
+  storageClass: ""
+  # Use a PVC you made yourself instead.
+  existingClaim: ""
+
+service:
+  mcpPort: 8000
+  webPort: 8080
+
+# Restrict who can reach the pod. The MCP port has no authentication of its
+# own: put a gateway with authentication in front and allow only that here.
+networkPolicy:
+  enabled: false
+  # Pods that may call the MCP endpoint (port 8000).
+  mcpFrom: []
+  # - namespaceSelector:
+  #     matchLabels:
+  #       kubernetes.io/metadata.name: agentgateway-system
+  # Pods that may open the connect page (port 8080), e.g. the ingress/gateway.
+  webFrom: []
+  # Outbound: DNS plus HTTPS to Spotify. Spotify has no fixed IPs, so 443 is
+  # allowed to anywhere.
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 16Mi
+  limits:
+    memory: 64Mi

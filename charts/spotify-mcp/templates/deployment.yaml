@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "spotify-mcp.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # One writer for the token file: the old pod stops before the new one starts.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "spotify-mcp.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "spotify-mcp.labels" . | nindent 8 }}
+    spec:
+      # The server needs no Kubernetes API access.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: spotify-mcp
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: SPOTIFY_REDIRECT_URI
+              value: {{ required "config.redirectURI is required" .Values.config.redirectURI | quote }}
+            {{- with .Values.config.publicURL }}
+            - name: PUBLIC_URL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: PROFILE
+              value: {{ .Values.config.profile | quote }}
+            - name: DATA_DIR
+              value: /data
+            - name: MCP_ADDR
+              value: ":{{ .Values.service.mcpPort }}"
+            - name: WEB_ADDR
+              value: ":{{ .Values.service.webPort }}"
+          envFrom:
+            - secretRef:
+                name: {{ .Values.existingSecret }}
+          ports:
+            - name: mcp
+              containerPort: {{ .Values.service.mcpPort }}
+            - name: web
+              containerPort: {{ .Values.service.webPort }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: web
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: mcp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default .Release.Name }}
