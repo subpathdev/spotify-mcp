@@ -218,17 +218,17 @@ func writeJSON(path string, v any) error {
 		return err
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp) // no-op after a successful rename
+	defer func() { _ = os.Remove(tmp) }() // no-op after a successful rename
 	if err := f.Chmod(0o600); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if _, err := f.Write(b); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if err := f.Close(); err != nil {

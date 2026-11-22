@@ -94,7 +94,7 @@ func setup(t *testing.T) *env {
 
 func body(t *testing.T, resp *http.Response) string {
 	t.Helper()
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
 	return string(b)
 }
@@ -117,7 +117,7 @@ func (e *env) startLogin(t *testing.T, code string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("connect: %d", resp.StatusCode)
 	}
@@ -159,7 +159,7 @@ func TestConnectFlow(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("replayed callback: %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestCallbackNeedsSameBrowser(t *testing.T) {
@@ -172,7 +172,7 @@ func TestCallbackNeedsSameBrowser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("callback from other browser: %d", resp.StatusCode)
 	}
@@ -214,7 +214,7 @@ func TestBadInviteAndCrossSite(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("bad invite: %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	code, _ := e.st.CreateInvite("default", time.Hour)
 	req, _ := http.NewRequest(http.MethodPost, e.web.URL+"/connect", strings.NewReader(url.Values{"invite": {code}, "action": {"disconnect"}}.Encode()))
@@ -224,7 +224,7 @@ func TestBadInviteAndCrossSite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("cross-site POST: %d", resp.StatusCode)
 	}

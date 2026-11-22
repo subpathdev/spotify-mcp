@@ -313,7 +313,7 @@ func (h *Handler) fetchMe(ctx context.Context, tok *oauth2.Token) (me, error) {
 	if err != nil {
 		return m, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusForbidden {
 		return m, errNotAllowlisted
 	}
