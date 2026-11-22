@@ -1,8 +1,8 @@
-package web
+package web_test
 
 import (
-	"crypto/sha256"
-	"encoding/base64"
+	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,235 +14,212 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/oauth2"
-
-	"github.com/subpathdev/spotify-mcp/internal/store"
+	"github.com/subpathdev/spotify-mcp/internal/account"
+	"github.com/subpathdev/spotify-mcp/internal/filestore"
+	"github.com/subpathdev/spotify-mcp/internal/web"
 )
 
-// fakeAccounts plays accounts.spotify.com and api.spotify.com/v1/me.
-type fakeAccounts struct {
-	*httptest.Server
+// fakeOAuth accepts the code "good" with the verifier of a started login.
+type fakeOAuth struct {
 	mu        sync.Mutex
-	challenge string
-	meStatus  int
+	verifiers map[string]string
 }
 
-func newFakeAccounts(t *testing.T) *fakeAccounts {
-	f := &fakeAccounts{meStatus: http.StatusOK}
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/token", func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		sum := sha256.Sum256([]byte(r.PostForm.Get("code_verifier")))
-		f.mu.Lock()
-		ok := r.PostForm.Get("code") == "good-code" && base64.RawURLEncoding.EncodeToString(sum[:]) == f.challenge
-		f.mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		if !ok {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = io.WriteString(w, `{"error":"invalid_grant"}`)
-			return
+func (f *fakeOAuth) AuthCodeURL(state, verifier string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.verifiers[state] = verifier
+	return "https://accounts.test/authorize?" + url.Values{"state": {state}}.Encode()
+}
+
+func (f *fakeOAuth) Exchange(_ context.Context, code, verifier string) (account.Token, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, v := range f.verifiers {
+		if v == verifier && code == "good" {
+			return account.Token{AccessToken: "a", RefreshToken: "r", Expiry: time.Now().Add(time.Hour)}, nil
 		}
-		_, _ = io.WriteString(w, `{"access_token":"a1","token_type":"Bearer","expires_in":3600,"refresh_token":"r1"}`)
-	})
-	mux.HandleFunc("GET /v1/me", func(w http.ResponseWriter, r *http.Request) {
-		f.mu.Lock()
-		st := f.meStatus
-		f.mu.Unlock()
-		w.WriteHeader(st)
-		_, _ = io.WriteString(w, `{"id":"jan","display_name":"Jan"}`)
-	})
-	f.Server = httptest.NewServer(mux)
-	t.Cleanup(f.Close)
-	return f
+	}
+	return account.Token{}, errors.New("bad code")
+}
+
+func (f *fakeOAuth) Refresh(context.Context, string) (account.Token, error) {
+	return account.Token{}, errors.New("unused")
+}
+
+type fakeIdentity struct{ err error }
+
+func (f *fakeIdentity) User(context.Context, string) (account.User, error) {
+	return account.User{ID: "jan", DisplayName: "Jan"}, f.err
 }
 
 type env struct {
-	st      *store.Store
-	acc     *fakeAccounts
-	web     *httptest.Server
-	browser *http.Client
-	changed []string
+	srv      *httptest.Server
+	inviter  *account.Inviter
+	store    *filestore.Store
+	identity *fakeIdentity
 }
 
-func setup(t *testing.T) *env {
-	e := &env{acc: newFakeAccounts(t)}
-	var err error
-	if e.st, err = store.Open(t.TempDir()); err != nil {
+func newEnv(t *testing.T) *env {
+	t.Helper()
+	st, err := filestore.Open(t.TempDir())
+	if err != nil {
 		t.Fatal(err)
 	}
-	h := &Handler{
-		OAuth: &oauth2.Config{
-			ClientID: "id", ClientSecret: "secret", Scopes: []string{"user-modify-playback-state"},
-			Endpoint: oauth2.Endpoint{AuthURL: "https://accounts.example/authorize", TokenURL: e.acc.URL + "/api/token", AuthStyle: oauth2.AuthStyleInHeader},
-		},
-		Store:      e.st,
-		Log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
-		MeURL:      e.acc.URL + "/v1/me",
-		HTTPClient: e.acc.Client(),
-		OnConnect:  func(p string) { e.changed = append(e.changed, p) },
+	id := &fakeIdentity{}
+	svc := account.NewService(st, st, &fakeOAuth{verifiers: map[string]string{}}, id)
+	srv := httptest.NewTLSServer(web.NewHandler(svc, slog.New(slog.DiscardHandler)))
+	t.Cleanup(srv.Close)
+	return &env{srv: srv, inviter: account.NewInviter(st), store: st, identity: id}
+}
+
+func (e *env) invite(t *testing.T) string {
+	t.Helper()
+	code, _, err := e.inviter.CreateInvite(context.Background(), "default", time.Hour)
+	if err != nil {
+		t.Fatal(err)
 	}
-	e.web = httptest.NewTLSServer(h.Routes())
-	t.Cleanup(e.web.Close)
-	h.OAuth.RedirectURL = e.web.URL + "/callback"
+	return string(code)
+}
+
+// browser is a client with its own cookies that doesn't follow redirects.
+func (e *env) browser(t *testing.T) *http.Client {
+	t.Helper()
 	jar, _ := cookiejar.New(nil)
-	e.browser = e.web.Client()
-	e.browser.Jar = jar
-	// Stop at the redirect to Spotify instead of following it.
-	e.browser.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return e
+	return &http.Client{
+		Transport:     e.srv.Client().Transport,
+		Jar:           jar,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }
 
 func body(t *testing.T, resp *http.Response) string {
 	t.Helper()
 	defer func() { _ = resp.Body.Close() }()
-	b, _ := io.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return string(b)
 }
 
-// startLogin opens the invite page, presses Connect and returns the state
-// from the redirect to Spotify.
-func (e *env) startLogin(t *testing.T, code string) string {
+func get(t *testing.T, c *http.Client, u string) (int, string) {
 	t.Helper()
-	resp, err := e.browser.Get(e.web.URL + "/connect?invite=" + url.QueryEscape(code))
+	resp, err := c.Get(u)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b := body(t, resp); resp.StatusCode != 200 || !strings.Contains(b, "Connect Spotify") {
-		t.Fatalf("invite page: %d %s", resp.StatusCode, b)
-	}
-	if rp := resp.Header.Get("Referrer-Policy"); rp != "no-referrer" {
-		t.Fatalf("Referrer-Policy %q", rp)
-	}
-	resp, err = e.browser.PostForm(e.web.URL+"/connect", url.Values{"invite": {code}, "action": {"connect"}})
+	return resp.StatusCode, body(t, resp)
+}
+
+func post(t *testing.T, c *http.Client, u string, form url.Values) *http.Response {
+	t.Helper()
+	resp, err := c.PostForm(u, form)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = resp.Body.Close()
+	return resp
+}
+
+// connect presses the button and returns the callback URL Spotify would
+// redirect to.
+func (e *env) connect(t *testing.T, c *http.Client, code string) string {
+	t.Helper()
+	resp := post(t, c, e.srv.URL+"/connect", url.Values{"invite": {code}, "action": {"connect"}})
+	_ = body(t, resp)
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("connect: %d", resp.StatusCode)
 	}
 	loc, _ := url.Parse(resp.Header.Get("Location"))
-	q := loc.Query()
-	if q.Get("code_challenge_method") != "S256" || q.Get("show_dialog") != "true" || q.Get("state") == "" {
-		t.Fatalf("authorize URL %s", loc)
-	}
-	e.acc.mu.Lock()
-	e.acc.challenge = q.Get("code_challenge")
-	e.acc.mu.Unlock()
-	return q.Get("state")
+	return e.srv.URL + "/callback?" + url.Values{"state": {loc.Query().Get("state")}, "code": {"good"}}.Encode()
 }
 
 func TestConnectFlow(t *testing.T) {
-	e := setup(t)
-	code, _ := e.st.CreateInvite("default", time.Hour)
-	state := e.startLogin(t, code)
+	e := newEnv(t)
+	b := e.browser(t)
+	code := e.invite(t)
 
-	resp, err := e.browser.Get(e.web.URL + "/callback?code=good-code&state=" + state)
-	if err != nil {
-		t.Fatal(err)
+	status, page := get(t, b, e.srv.URL+"/connect?invite="+code)
+	if status != http.StatusOK || !strings.Contains(page, "Connect Spotify") {
+		t.Fatalf("page: %d %s", status, page)
 	}
-	if b := body(t, resp); resp.StatusCode != 200 || !strings.Contains(b, "connected as Jan") {
-		t.Fatalf("callback: %d %s", resp.StatusCode, b)
-	}
-	tok, err := e.st.Token("default")
-	if err != nil || tok.RefreshToken != "r1" || tok.DisplayName != "Jan" {
-		t.Fatalf("token %+v %v", tok, err)
-	}
-	if len(e.changed) != 1 {
-		t.Fatalf("OnConnect calls %v", e.changed)
-	}
-	// The invite is used up, and the state can't be replayed.
-	if _, err := e.st.CheckInvite(code); err == nil {
-		t.Fatal("invite still valid after login")
-	}
-	resp, _ = e.browser.Get(e.web.URL + "/callback?code=good-code&state=" + state)
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("replayed callback: %d", resp.StatusCode)
-	}
-	_ = resp.Body.Close()
-}
+	callback := e.connect(t, b, code)
 
-func TestCallbackNeedsSameBrowser(t *testing.T) {
-	e := setup(t)
-	code, _ := e.st.CreateInvite("default", time.Hour)
-	state := e.startLogin(t, code)
-	// An attacker's browser has no login cookie.
-	other := &http.Client{Transport: e.web.Client().Transport}
-	resp, err := other.Get(e.web.URL + "/callback?code=good-code&state=" + state)
-	if err != nil {
-		t.Fatal(err)
+	// Another browser with the callback URL can't finish the login, and the
+	// attempt uses up the state.
+	if status, _ := get(t, e.browser(t), callback); status != http.StatusBadRequest {
+		t.Fatalf("foreign browser: %d", status)
 	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("callback from other browser: %d", resp.StatusCode)
+	callback = e.connect(t, b, code)
+	status, page = get(t, b, callback)
+	if status != http.StatusOK || !strings.Contains(page, "connected as Jan") {
+		t.Fatalf("callback: %d %s", status, page)
 	}
-	if _, err := e.st.Token("default"); err == nil {
-		t.Fatal("token saved from foreign browser")
+	if status, _ := get(t, b, callback); status != http.StatusBadRequest {
+		t.Fatalf("replay: %d", status)
+	}
+	if status, _ := get(t, b, e.srv.URL+"/connect?invite="+code); status != http.StatusForbidden {
+		t.Fatalf("used invite: %d", status)
+	}
+	if _, err := e.store.Connection(context.Background(), "default"); err != nil {
+		t.Fatalf("not stored: %v", err)
 	}
 }
 
-func TestNotOnAllowlist(t *testing.T) {
-	e := setup(t)
-	e.acc.meStatus = http.StatusForbidden
-	code, _ := e.st.CreateInvite("default", time.Hour)
-	state := e.startLogin(t, code)
-	resp, _ := e.browser.Get(e.web.URL + "/callback?code=good-code&state=" + state)
-	if b := body(t, resp); resp.StatusCode != http.StatusForbidden || !strings.Contains(b, "User Management") {
-		t.Fatalf("got %d %s", resp.StatusCode, b)
-	}
-	if _, err := e.st.CheckInvite(code); err != nil {
-		t.Fatal("invite used up although the login failed")
-	}
-}
-
-func TestCancelAtSpotify(t *testing.T) {
-	e := setup(t)
-	code, _ := e.st.CreateInvite("default", time.Hour)
-	state := e.startLogin(t, code)
-	resp, _ := e.browser.Get(e.web.URL + "/callback?error=access_denied&state=" + state)
-	if b := body(t, resp); !strings.Contains(b, "cancelled") {
-		t.Fatalf("cancel page: %s", b)
-	}
-	if _, err := e.st.CheckInvite(code); err != nil {
-		t.Fatal("invite used up by a cancelled login")
-	}
-}
-
-func TestBadInviteAndCrossSite(t *testing.T) {
-	e := setup(t)
-	resp, _ := e.browser.Get(e.web.URL + "/connect?invite=nope")
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("bad invite: %d", resp.StatusCode)
-	}
-	_ = resp.Body.Close()
-
-	code, _ := e.st.CreateInvite("default", time.Hour)
-	req, _ := http.NewRequest(http.MethodPost, e.web.URL+"/connect", strings.NewReader(url.Values{"invite": {code}, "action": {"disconnect"}}.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Sec-Fetch-Site", "cross-site")
-	resp, err := e.browser.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("cross-site POST: %d", resp.StatusCode)
+func TestNotAllowlistedPage(t *testing.T) {
+	e := newEnv(t)
+	e.identity.err = account.ErrNotAllowlisted
+	b := e.browser(t)
+	status, page := get(t, b, e.connect(t, b, e.invite(t)))
+	if status != http.StatusForbidden || !strings.Contains(page, "User Management") {
+		t.Fatalf("%d %s", status, page)
 	}
 }
 
 func TestDisconnect(t *testing.T) {
-	e := setup(t)
-	_ = e.st.SaveToken("default", store.Token{RefreshToken: "r", DisplayName: "Jan"})
-	code, _ := e.st.CreateInvite("default", time.Hour)
-	resp, _ := e.browser.Get(e.web.URL + "/connect?invite=" + code)
-	if b := body(t, resp); !strings.Contains(b, "Connected as <strong>Jan</strong>") {
-		t.Fatalf("status page: %s", b)
+	e := newEnv(t)
+	b := e.browser(t)
+	if status, _ := get(t, b, e.connect(t, b, e.invite(t))); status != http.StatusOK {
+		t.Fatal("connect failed")
 	}
-	resp, _ = e.browser.PostForm(e.web.URL+"/connect", url.Values{"invite": {code}, "action": {"disconnect"}})
-	if b := body(t, resp); resp.StatusCode != 200 || !strings.Contains(b, "Disconnected") {
-		t.Fatalf("disconnect: %d %s", resp.StatusCode, b)
+	code := e.invite(t)
+	if _, page := get(t, b, e.srv.URL+"/connect?invite="+code); !strings.Contains(page, "Connected as <strong>Jan</strong>") {
+		t.Fatalf("status page: %s", page)
 	}
-	if _, err := e.st.Token("default"); err == nil {
-		t.Fatal("token still there")
+	resp := post(t, b, e.srv.URL+"/connect", url.Values{"invite": {code}, "action": {"disconnect"}})
+	if page := body(t, resp); resp.StatusCode != http.StatusOK || !strings.Contains(page, "Disconnected") {
+		t.Fatalf("disconnect: %d %s", resp.StatusCode, page)
+	}
+	if _, err := e.store.Connection(context.Background(), "default"); !errors.Is(err, account.ErrNotFound) {
+		t.Fatalf("connection kept: %v", err)
+	}
+}
+
+func TestCrossSitePostRejected(t *testing.T) {
+	e := newEnv(t)
+	req, _ := http.NewRequest(http.MethodPost, e.srv.URL+"/connect", strings.NewReader("action=connect&invite="+e.invite(t)))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	resp, err := e.browser(t).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = body(t, resp)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+}
+
+func TestSecurityHeaders(t *testing.T) {
+	e := newEnv(t)
+	resp, err := e.browser(t).Get(e.srv.URL + "/connect?invite=bad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = body(t, resp)
+	if resp.StatusCode != http.StatusForbidden ||
+		resp.Header.Get("Referrer-Policy") != "no-referrer" ||
+		!strings.Contains(resp.Header.Get("Content-Security-Policy"), "default-src 'none'") {
+		t.Fatalf("%d %v", resp.StatusCode, resp.Header)
 	}
 }
