@@ -1,0 +1,10 @@
+# Secrets and tokens never go into Git.
+.env
+data/
+*.token
+tokens/
+invites.json
+
+# Build output
+/spotify-mcp
+*.tgz
