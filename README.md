@@ -96,7 +96,7 @@ All settings come from environment variables; see [`.env.example`](.env.example)
 
 - **The MCP endpoint has no authentication of its own.** Anyone who can reach port 8000 can control the connected account's playback. Run it behind a gateway that checks API keys or OAuth (e.g. [agentgateway](https://agentgateway.dev)), and restrict the port (the chart has an optional NetworkPolicy).
 - **Least privilege at Spotify:** the server asks only for `user-read-playback-state`, `user-modify-playback-state` and `user-read-currently-playing`. It can't read playlists, the library or the e-mail address.
-- **Tokens:** the refresh token lives in `DATA_DIR/tokens/<profile>.json` with mode 0600. When Spotify rotates it, the new one is written before it's used, so restarts keep working. Nothing is logged.
+- **Tokens:** the refresh token lives in `DATA_DIR/tokens/<profile>.json` with mode 0600. A refresh reads, refreshes and writes the token under one lock (a mutex plus `flock`, which also covers the `invite` command's process), so a rotated refresh token is on disk before it's used and a login during a refresh is never overwritten. Nothing is logged.
 - **Invites** are 256-bit random codes. Only their SHA-256 is stored; each works once and expires.
 - **Login:** OAuth authorization code flow with PKCE and a `state` tied to the browser by a cookie, so a leaked callback URL can't be replayed in another browser. Cross-site form posts are rejected, and pages send no `Referer`.
 - **Container:** static binary on `scratch`, non-root, read-only root filesystem, no capabilities, no Kubernetes API token.
@@ -105,6 +105,22 @@ All settings come from environment variables; see [`.env.example`](.env.example)
 Found a security problem? Please open a private security advisory on GitHub rather than a public issue.
 
 ## Development
+
+The code is layered so the rules can be tested without HTTP, files or Spotify:
+
+```mermaid
+flowchart LR
+  main["cmd/spotify-mcp (wiring)"] --> mcpserver & web & config
+  mcpserver -- "Player interface" --> playback
+  web -- "Connector interface" --> account
+  playback -- "Spotify port" --> spotify
+  account -- "Tokens / Invites ports" --> filestore
+  account -- "OAuth / Identity ports" --> spotify
+```
+
+- `internal/playback` and `internal/account` are the domain: typed values (`URI`, `DeviceID`, `Profile`, `InviteCode`), the rules, and the ports (interfaces) they need.
+- `internal/spotify` (Web API + OAuth) and `internal/filestore` (JSON files) implement the ports. Wire and file formats stay unexported in them.
+- `internal/mcpserver` and `internal/web` are the transports. Each depends on a small interface it defines itself.
 
 ```bash
 go test -race ./...
