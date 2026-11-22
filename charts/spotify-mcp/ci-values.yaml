@@ -1,0 +1,15 @@
+# Used by CI to render the chart with everything turned on.
+config:
+  redirectURI: https://spotify.example.com/callback
+networkPolicy:
+  enabled: true
+  mcpFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: gateway
+  webFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: gateway
+persistence:
+  storageClass: local-path

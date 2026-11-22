@@ -1,0 +1,9 @@
+apiVersion: v2
+name: spotify-mcp
+description: MCP server that controls Spotify playback, with a connect page that uses one-time invite links.
+type: application
+# Both are set from the release version when the chart is packaged.
+version: 0.0.0
+appVersion: 0.0.0
+sources:
+  - https://github.com/subpathdev/spotify-mcp
