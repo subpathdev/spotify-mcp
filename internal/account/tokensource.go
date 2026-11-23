@@ -36,7 +36,7 @@ func NewTokenSource(tokens Tokens, oauth OAuth, id ProfileID, clock Clock) Token
 }
 
 func (ts *tokenSource) AccessToken(ctx context.Context) (string, error) {
-	if ts.profile == nil {
+	if ts.profile.IsZero() {
 		return "", ErrNotConnected
 	}
 	c, err := ts.tokens.Connection(ctx, ts.profile)
@@ -56,15 +56,9 @@ func (ts *tokenSource) AccessToken(ctx context.Context) (string, error) {
 			access = c.Token().AccessToken()
 			return c, nil
 		}
-		old := c.Token().RefreshToken()
-		tok, err := ts.oauth.Refresh(ctx, old)
+		tok, err := ts.oauth.Refresh(ctx, c.Token().RefreshToken())
 		if err != nil {
 			return nil, err
-		}
-		if tok.RefreshToken() == "" { // Spotify kept the old one
-			if tok, err = NewToken(tok.AccessToken(), old, tok.Expiry()); err != nil {
-				return nil, err
-			}
 		}
 		access = tok.AccessToken()
 		return withToken(c, tok), nil

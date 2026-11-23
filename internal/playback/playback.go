@@ -13,35 +13,23 @@ import (
 	"time"
 )
 
-// The value types below (Kind, URI, DeviceID) are interfaces with an
-// unexported marker method, so only this package implements them and every
-// value went through one of its constructors. Their implementations are small
-// comparable structs: two values are equal with == exactly when they hold the
+// The value types below (Kind, URI, DeviceID) are opaque structs: their
+// fields are unexported, so other packages get a valid value only from this
+// package's functions. The only value they can make themselves is the zero
+// value (see IsZero). Two values are equal with == exactly when they hold the
 // same text.
 
 // Kind is the type of a Spotify item. Get one from ParseKind, Kinds or the
 // Kind* functions.
-type Kind interface {
-	String() string
-	// IsContext reports whether items of this kind play as a context (a list
-	// Spotify continues through) rather than on their own.
-	IsContext() bool
-	isKind()
-}
-
-type kind struct{ s string }
-
-func (k kind) String() string  { return k.s }
-func (k kind) IsContext() bool { return k.s != "track" && k.s != "episode" }
-func (kind) isKind()           {}
+type Kind struct{ s string }
 
 // The kinds this server can search for and play.
-func KindTrack() Kind    { return kind{"track"} }
-func KindAlbum() Kind    { return kind{"album"} }
-func KindArtist() Kind   { return kind{"artist"} }
-func KindPlaylist() Kind { return kind{"playlist"} }
-func KindShow() Kind     { return kind{"show"} }
-func KindEpisode() Kind  { return kind{"episode"} }
+func KindTrack() Kind    { return Kind{"track"} }
+func KindAlbum() Kind    { return Kind{"album"} }
+func KindArtist() Kind   { return Kind{"artist"} }
+func KindPlaylist() Kind { return Kind{"playlist"} }
+func KindShow() Kind     { return Kind{"show"} }
+func KindEpisode() Kind  { return Kind{"episode"} }
 
 // Kinds lists every Kind, in the order shown to people.
 func Kinds() []Kind {
@@ -56,70 +44,78 @@ func ParseKind(s string) (Kind, error) {
 	kinds := Kinds()
 	names := make([]string, len(kinds))
 	for i, k := range kinds {
-		if k.String() == s {
+		if k.s == s {
 			return k, nil
 		}
-		names[i] = k.String()
+		names[i] = k.s
 	}
-	return nil, fmt.Errorf("unknown type %q (use one of %s)", s, strings.Join(names, ", "))
+	return Kind{}, fmt.Errorf("unknown type %q (use one of %s)", s, strings.Join(names, ", "))
 }
+
+func (k Kind) String() string { return k.s }
+
+// IsContext reports whether items of this kind play as a context (a list
+// Spotify continues through) rather than on their own.
+func (k Kind) IsContext() bool { return k != KindTrack() && k != KindEpisode() }
+
+// IsZero reports whether k is the zero value, which is not a valid kind.
+func (k Kind) IsZero() bool { return k.s == "" }
 
 // URI is a parsed spotify:<kind>:<id> URI. Get one from ParseURI.
-type URI interface {
-	// Kind of the URI's item.
-	Kind() Kind
-	String() string
-	isURI()
-}
-
-type uri struct {
+type URI struct {
 	kind Kind
 	id   string
 }
-
-func (u uri) Kind() Kind     { return u.kind }
-func (u uri) String() string { return "spotify:" + u.kind.String() + ":" + u.id }
-func (uri) isURI()           {}
 
 // ParseURI parses a spotify:<kind>:<id> URI.
 func ParseURI(s string) (URI, error) {
 	parts := strings.Split(strings.TrimSpace(s), ":")
 	if len(parts) != 3 || parts[0] != "spotify" || parts[2] == "" {
-		return nil, fmt.Errorf("%q is not a Spotify URI like spotify:track:<id>", s)
+		return URI{}, fmt.Errorf("%q is not a Spotify URI like spotify:track:<id>", s)
 	}
 	if parts[1] == "" {
-		return nil, fmt.Errorf("unsupported Spotify URI type %q", parts[1])
+		return URI{}, fmt.Errorf("unsupported Spotify URI type %q", parts[1])
 	}
 	k, err := ParseKind(parts[1])
 	if err != nil {
-		return nil, fmt.Errorf("unsupported Spotify URI type %q", parts[1])
+		return URI{}, fmt.Errorf("unsupported Spotify URI type %q", parts[1])
 	}
-	return uri{kind: k, id: parts[2]}, nil
+	return URI{kind: k, id: parts[2]}, nil
 }
+
+// Kind of the URI's item.
+func (u URI) Kind() Kind { return u.kind }
+
+func (u URI) String() string {
+	if u.IsZero() {
+		return ""
+	}
+	return "spotify:" + u.kind.s + ":" + u.id
+}
+
+// IsZero reports whether u is the zero value, which is not a valid URI.
+func (u URI) IsZero() bool { return u.id == "" }
 
 // DeviceID is Spotify's ID of a Connect device. Get one from ParseDeviceID.
-// A nil DeviceID means the active device.
-type DeviceID interface {
-	String() string
-	isDeviceID()
-}
-
-type deviceID struct{ s string }
-
-func (d deviceID) String() string { return d.s }
-func (deviceID) isDeviceID()      {}
+// The zero DeviceID means the active device.
+type DeviceID struct{ s string }
 
 // ParseDeviceID checks a device ID.
 func ParseDeviceID(s string) (DeviceID, error) {
 	if strings.TrimSpace(s) == "" || strings.ContainsAny(s, " \t\r\n") {
-		return nil, fmt.Errorf("invalid device ID %q", s)
+		return DeviceID{}, fmt.Errorf("invalid device ID %q", s)
 	}
-	return deviceID{s: s}, nil
+	return DeviceID{s: s}, nil
 }
+
+func (d DeviceID) String() string { return d.s }
+
+// IsZero reports whether d is the zero value: no device, or the active one.
+func (d DeviceID) IsZero() bool { return d.s == "" }
 
 // Device is a Spotify Connect device. Get one from NewDevice.
 type Device interface {
-	// ID is nil for devices Spotify gives no ID; they can't be addressed.
+	// ID is zero for devices Spotify gives no ID; they can't be addressed.
 	ID() DeviceID
 	Name() string
 	// Type is Spotify's device type, e.g. "Computer" or "Smartphone".
@@ -135,7 +131,7 @@ type device struct {
 	active, restricted bool
 }
 
-// NewDevice builds a Device; id may be nil.
+// NewDevice builds a Device; id may be zero.
 func NewDevice(id DeviceID, name, typ string, active, restricted bool) Device {
 	return &device{id: id, name: name, typ: typ, active: active, restricted: restricted}
 }
@@ -186,7 +182,7 @@ func WithDuration(d time.Duration) ItemOption { return func(it *item) { it.durat
 
 // NewItem builds an Item; its kind comes from uri, which is required.
 func NewItem(u URI, name string, opts ...ItemOption) (Item, error) {
-	if u == nil {
+	if u.IsZero() {
 		return nil, errors.New("item has no URI")
 	}
 	it := &item{name: name, uri: u}
@@ -251,7 +247,7 @@ type Spotify interface {
 	Devices(ctx context.Context) ([]Device, error)
 	// Search returns up to limit (1..MaxSearchResults) items of one kind.
 	Search(ctx context.Context, query string, kind Kind, limit int) ([]Item, error)
-	// Play plays uri; a nil device means the active one.
+	// Play plays uri; the zero device means the active one.
 	Play(ctx context.Context, device DeviceID, uri URI) error
 	Resume(ctx context.Context, device DeviceID) error
 	Pause(ctx context.Context, device DeviceID) error

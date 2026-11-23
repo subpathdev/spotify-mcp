@@ -114,7 +114,7 @@ func TestRejectsBadInput(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	s := open(t, dir)
-	if err := s.SaveConnection(ctx, nil, testConnection("r")); err == nil {
+	if err := s.SaveConnection(ctx, account.ProfileID{}, testConnection("r")); err == nil {
 		t.Fatal("nil profile accepted")
 	}
 	if err := s.SaveConnection(ctx, profile, nil); err == nil {

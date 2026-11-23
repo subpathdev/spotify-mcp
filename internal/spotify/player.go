@@ -56,10 +56,8 @@ type wireDevice struct {
 }
 
 func (d wireDevice) device() playback.Device {
-	id, err := playback.ParseDeviceID(d.ID)
-	if err != nil {
-		id = nil // Spotify sends no ID for some devices
-	}
+	// Spotify sends no ID for some devices; they keep the zero DeviceID.
+	id, _ := playback.ParseDeviceID(d.ID)
 	return playback.NewDevice(id, d.Name, d.Type, d.IsActive, d.IsRestricted)
 }
 
@@ -125,7 +123,7 @@ func (p *player) Devices(ctx context.Context) ([]playback.Device, error) {
 // Search implements playback.Spotify.
 func (p *player) Search(ctx context.Context, query string, kind playback.Kind, limit int) ([]playback.Item, error) {
 	limit = min(max(limit, 1), playback.MaxSearchResults)
-	if kind == nil {
+	if kind.IsZero() {
 		return nil, errors.New("search needs a type")
 	}
 	q := url.Values{"q": {query}, "type": {kind.String()}, "limit": {strconv.Itoa(limit)}}
@@ -148,7 +146,7 @@ func (p *player) Search(ctx context.Context, query string, kind playback.Kind, l
 }
 
 func deviceQuery(id playback.DeviceID) url.Values {
-	if id == nil {
+	if id.IsZero() {
 		return nil
 	}
 	return url.Values{"device_id": {id.String()}}
@@ -157,7 +155,7 @@ func deviceQuery(id playback.DeviceID) url.Values {
 // Play implements playback.Spotify. A track or episode plays on its own; an
 // album, artist, playlist or show plays as a context.
 func (p *player) Play(ctx context.Context, device playback.DeviceID, uri playback.URI) error {
-	if uri == nil {
+	if uri.IsZero() {
 		return errors.New("no URI to play")
 	}
 	var body any = map[string]any{"uris": []string{uri.String()}}
@@ -195,7 +193,7 @@ func (p *player) Previous(ctx context.Context, device playback.DeviceID) error {
 
 // Transfer implements playback.Spotify.
 func (p *player) Transfer(ctx context.Context, device playback.DeviceID, play bool) error {
-	if device == nil {
+	if device.IsZero() {
 		return errors.New("transfer needs a device")
 	}
 	body := map[string]any{"device_ids": []string{device.String()}, "play": play}

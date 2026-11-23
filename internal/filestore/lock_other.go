@@ -2,6 +2,10 @@
 
 package filestore
 
-// lockFile has no cross-process lock on this platform; the Store's mutex
-// still protects one process.
-func lockFile(string) (release func(), err error) { return func() {}, nil }
+// noLock is the locker on platforms without flock: there is no cross-process
+// lock, and the store's mutex still protects one process.
+type noLock struct{}
+
+func newLocker(string) locker { return noLock{} }
+
+func (noLock) lock() (release func(), err error) { return func() {}, nil }

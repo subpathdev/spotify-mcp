@@ -5,30 +5,28 @@ import (
 	"regexp"
 )
 
-// Value types in this package are interfaces with an unexported marker method, so
-// only this package implements them and every value went through one of its
-// constructors. Their implementations are small comparable structs: two
-// values are equal with == exactly when they hold the same text.
+// Value types in this package (ProfileID, InviteCode, InviteHash) are opaque
+// structs: their fields are unexported, so other packages get a valid value
+// only from a Parse function. The only value they can make themselves is the
+// zero value, which every function here rejects (see IsZero). Two values are
+// equal with == exactly when they hold the same text.
 
 // ProfileID identifies a profile: 1-63 lower-case letters, digits and dashes.
 // Adapters may use String() in file and key names. Get one from
 // ParseProfileID.
-type ProfileID interface {
-	String() string
-	isProfileID()
-}
-
-type profileID struct{ s string }
-
-func (p profileID) String() string { return p.s }
-func (profileID) isProfileID()     {}
+type ProfileID struct{ s string }
 
 var profileRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 // ParseProfileID checks a profile ID.
 func ParseProfileID(s string) (ProfileID, error) {
 	if !profileRe.MatchString(s) {
-		return nil, fmt.Errorf("invalid profile %q: use 1-63 lower-case letters, digits and dashes", s)
+		return ProfileID{}, fmt.Errorf("invalid profile %q: use 1-63 lower-case letters, digits and dashes", s)
 	}
-	return profileID{s: s}, nil
+	return ProfileID{s: s}, nil
 }
+
+func (p ProfileID) String() string { return p.s }
+
+// IsZero reports whether p is the zero value, which is not a valid ID.
+func (p ProfileID) IsZero() bool { return p.s == "" }

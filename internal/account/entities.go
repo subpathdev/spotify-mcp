@@ -38,12 +38,14 @@ func (a *spotifyAccount) Name() string {
 }
 
 // Token is an OAuth token pair as Spotify issues it. Get one from NewToken.
-// It prints as redacted, so it can't leak into logs by accident.
+// Spotify's tokens are opaque strings, not JWTs, so there is nothing to parse
+// in them.
 type Token interface {
 	AccessToken() string
-	// RefreshToken is empty when Spotify keeps the old one.
 	RefreshToken() string
 	Expiry() time.Time
+	// String is redacted, so a token can't leak into logs by accident.
+	String() string
 }
 
 type token struct {
@@ -51,10 +53,10 @@ type token struct {
 	expiry          time.Time
 }
 
-// NewToken builds a Token. At least one of the two tokens is required.
+// NewToken builds a Token; both tokens are required.
 func NewToken(accessToken, refreshToken string, expiry time.Time) (Token, error) {
-	if accessToken == "" && refreshToken == "" {
-		return nil, errors.New("token is empty")
+	if accessToken == "" || refreshToken == "" {
+		return nil, errors.New("token needs an access and a refresh token")
 	}
 	return &token{access: accessToken, refresh: refreshToken, expiry: expiry}, nil
 }
@@ -83,8 +85,8 @@ type connection struct {
 
 // NewConnection builds a Connection; token and account are required.
 func NewConnection(tok Token, acc SpotifyAccount, connectedAt time.Time) (Connection, error) {
-	if tok == nil || tok.RefreshToken() == "" {
-		return nil, errors.New("connection needs a refresh token")
+	if tok == nil {
+		return nil, errors.New("connection needs a token")
 	}
 	if acc == nil {
 		return nil, errors.New("connection needs a Spotify account")

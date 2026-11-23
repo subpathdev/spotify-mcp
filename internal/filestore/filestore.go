@@ -29,8 +29,15 @@ type Store interface {
 }
 
 type store struct {
-	dir string
-	mu  sync.Mutex
+	dir   string
+	mu    sync.Mutex // goroutines of this process
+	files locker     // other processes on the same directory
+}
+
+// locker excludes other processes from the data directory while held. Each
+// platform has its own implementation (lock_unix.go, lock_other.go).
+type locker interface {
+	lock() (release func(), err error)
 }
 
 // Open creates the data directory if needed.
@@ -38,7 +45,7 @@ func Open(dir string) (Store, error) {
 	if err := os.MkdirAll(filepath.Join(dir, "tokens"), 0o700); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
-	return &store{dir: dir}, nil
+	return &store{dir: dir, files: newLocker(filepath.Join(dir, ".lock"))}, nil
 }
 
 // connectionRecord is the on-disk format of a connection.
@@ -98,7 +105,7 @@ func (r inviteRecord) invite(hash string) (account.Invite, error) {
 // lock takes the in-process and the cross-process lock.
 func (s *store) lock() (unlock func(), err error) {
 	s.mu.Lock()
-	release, err := lockFile(filepath.Join(s.dir, ".lock"))
+	release, err := s.files.lock()
 	if err != nil {
 		s.mu.Unlock()
 		return nil, fmt.Errorf("lock data dir: %w", err)
@@ -107,15 +114,12 @@ func (s *store) lock() (unlock func(), err error) {
 }
 
 func (s *store) connectionPath(id account.ProfileID) (string, error) {
-	if id == nil {
+	// Only account.ParseProfileID makes a non-zero ID, and its rules keep
+	// the name safe as a file name.
+	if id.IsZero() {
 		return "", errors.New("no profile given")
 	}
-	// Only account.ParseProfileID creates IDs, but a type embedding one could
-	// still override String(); check again because it ends up in a file name.
 	name := id.String()
-	if _, err := account.ParseProfileID(name); err != nil {
-		return "", err
-	}
 	return filepath.Join(s.dir, "tokens", name+".json"), nil
 }
 
@@ -229,7 +233,7 @@ func (s *store) changeInvites(fn func(map[string]inviteRecord) error) error {
 
 // AddInvite implements account.Invites.
 func (s *store) AddInvite(_ context.Context, i account.Invite) error {
-	if i == nil || i.Hash() == nil || i.ProfileID() == nil {
+	if i == nil || i.Hash().IsZero() || i.ProfileID().IsZero() {
 		return errors.New("incomplete invite")
 	}
 	return s.changeInvites(func(inv map[string]inviteRecord) error {
@@ -240,7 +244,7 @@ func (s *store) AddInvite(_ context.Context, i account.Invite) error {
 
 // Invite implements account.Invites.
 func (s *store) Invite(_ context.Context, h account.InviteHash) (account.Invite, error) {
-	if h == nil {
+	if h.IsZero() {
 		return nil, account.ErrNotFound
 	}
 	unlock, err := s.lock()
@@ -261,7 +265,7 @@ func (s *store) Invite(_ context.Context, h account.InviteHash) (account.Invite,
 
 // TakeInvite implements account.Invites.
 func (s *store) TakeInvite(_ context.Context, h account.InviteHash) (account.Invite, error) {
-	if h == nil {
+	if h.IsZero() {
 		return nil, account.ErrNotFound
 	}
 	key := h.String()

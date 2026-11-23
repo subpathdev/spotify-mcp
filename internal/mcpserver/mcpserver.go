@@ -237,14 +237,14 @@ func text(s string) *mcp.CallToolResult {
 
 func formatDevice(d playback.Device) string {
 	id := "none"
-	if d.ID() != nil {
+	if !d.ID().IsZero() {
 		id = d.ID().String()
 	}
 	s := fmt.Sprintf("%s (%s, id %s)", d.Name(), d.Type(), id)
 	if d.Active() {
 		s += " [active]"
 	}
-	if d.Restricted() || d.ID() == nil {
+	if d.Restricted() || d.ID().IsZero() {
 		s += " [can't be controlled]"
 	}
 	return s

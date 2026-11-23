@@ -21,11 +21,11 @@ func (f *fakeSpotify) Search(_ context.Context, q string, k Kind, limit int) ([]
 }
 func (f *fakeSpotify) cmd(name string, id DeviceID) error {
 	s := ""
-	if id != nil {
+	if !id.IsZero() {
 		s = id.String()
 	}
 	f.calls = append(f.calls, name+" "+s)
-	if f.noActive && id == nil {
+	if f.noActive && id.IsZero() {
 		return ErrNoActiveDevice
 	}
 	return nil
@@ -165,7 +165,7 @@ func TestValues(t *testing.T) {
 			t.Errorf("device ID %q accepted", s)
 		}
 	}
-	if _, err := NewItem(nil, "x"); err == nil {
+	if _, err := NewItem(URI{}, "x"); err == nil {
 		t.Fatal("item without URI accepted")
 	}
 	it := must(NewItem(must(ParseURI("spotify:track:1")), "x", WithArtists("a", "b")))
@@ -176,7 +176,7 @@ func TestValues(t *testing.T) {
 }
 
 func TestDeviceWithoutID(t *testing.T) {
-	f := &fakeSpotify{devices: []Device{NewDevice(nil, "Web Player", "Computer", false, false)}}
+	f := &fakeSpotify{devices: []Device{NewDevice(DeviceID{}, "Web Player", "Computer", false, false)}}
 	if _, err := NewService(f).Pause(context.Background(), "web player"); err == nil || !strings.Contains(err.Error(), "no ID") {
 		t.Fatalf("device without ID: %v", err)
 	}

@@ -120,7 +120,7 @@ func TestPlayBodies(t *testing.T) {
 			t.Errorf("%s: %+v", uri, c)
 		}
 	}
-	if err := p.Resume(ctx, nil); err != nil {
+	if err := p.Resume(ctx, playback.DeviceID{}); err != nil {
 		t.Fatal(err)
 	}
 	if c := api.last(); c.body != "" || c.query != "" {
@@ -144,14 +144,14 @@ func TestErrors(t *testing.T) {
 			w.WriteHeader(http.StatusTooManyRequests)
 		},
 	})
-	if err := p.Pause(ctx, nil); !errors.Is(err, playback.ErrNoActiveDevice) {
+	if err := p.Pause(ctx, playback.DeviceID{}); !errors.Is(err, playback.ErrNoActiveDevice) {
 		t.Errorf("pause: %v", err)
 	}
-	if err := p.Next(ctx, nil); !errors.Is(err, playback.ErrPremiumRequired) {
+	if err := p.Next(ctx, playback.DeviceID{}); !errors.Is(err, playback.ErrPremiumRequired) {
 		t.Errorf("next: %v", err)
 	}
 	var apiErr *Error
-	if err := p.Previous(ctx, nil); !errors.As(err, &apiErr) || apiErr.Status != 429 || !strings.Contains(err.Error(), "7 s") {
+	if err := p.Previous(ctx, playback.DeviceID{}); !errors.As(err, &apiErr) || apiErr.Status != 429 || !strings.Contains(err.Error(), "7 s") {
 		t.Errorf("previous: %v", err)
 	}
 }
@@ -167,7 +167,7 @@ func TestUnauthorizedRetriesOnceWithFreshToken(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		},
 	})
-	if err := p.Pause(ctx, nil); err != nil {
+	if err := p.Pause(ctx, playback.DeviceID{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(tokens.invalidated) != 1 || tokens.invalidated[0] != "t1" || api.count() != 2 {
@@ -226,7 +226,7 @@ func TestOAuthErrors(t *testing.T) {
 			_, _ = io.WriteString(w, `{"error":"`+answer+`"}`)
 			return
 		}
-		_, _ = io.WriteString(w, `{"access_token":"a2","token_type":"Bearer","expires_in":3600,"refresh_token":"r1"}`)
+		_, _ = io.WriteString(w, `{"access_token":"a2","token_type":"Bearer","expires_in":3600}`)
 	}))
 	defer srv.Close()
 	o := NewOAuth(OAuthConfig{
@@ -235,8 +235,8 @@ func TestOAuthErrors(t *testing.T) {
 	})
 
 	tok, err := o.Refresh(ctx, "r1")
-	if err != nil || tok.AccessToken() != "a2" || tok.RefreshToken() != "" {
-		t.Fatalf("unchanged refresh token must be reported as empty: %+v %v", tok, err)
+	if err != nil || tok.AccessToken() != "a2" || tok.RefreshToken() != "r1" {
+		t.Fatalf("Spotify sent no new refresh token, so the old one must be kept: %v %v", tok, err)
 	}
 	answer = "invalid_grant"
 	if _, err := o.Refresh(ctx, "r1"); !errors.Is(err, account.ErrRevoked) {

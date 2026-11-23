@@ -117,21 +117,21 @@ func (c callback) Code() string         { return c.code }
 func (c callback) SpotifyError() string { return c.spotifyError }
 
 func (s *service) CreateInvite(ctx context.Context, id ProfileID, ttl time.Duration) (InviteCode, time.Time, error) {
-	if id == nil {
-		return nil, time.Time{}, errors.New("invite needs a profile")
+	if id.IsZero() {
+		return InviteCode{}, time.Time{}, errors.New("invite needs a profile")
 	}
 	if ttl <= 0 {
-		return nil, time.Time{}, fmt.Errorf("invite TTL must be positive, got %s", ttl)
+		return InviteCode{}, time.Time{}, fmt.Errorf("invite TTL must be positive, got %s", ttl)
 	}
 	code := newInviteCode()
 	now := s.clock.Now()
-	inv := &invite{hash: hashInvite(code), profileID: id, expires: now.Add(ttl)}
+	inv := &invite{hash: code.Hash(), profileID: id, expires: now.Add(ttl)}
 	// Expired invites are removed here, so the store doesn't keep growing.
 	if err := s.invites.PruneInvites(ctx, now); err != nil {
-		return nil, time.Time{}, fmt.Errorf("prune invites: %w", err)
+		return InviteCode{}, time.Time{}, fmt.Errorf("prune invites: %w", err)
 	}
 	if err := s.invites.AddInvite(ctx, inv); err != nil {
-		return nil, time.Time{}, fmt.Errorf("save invite: %w", err)
+		return InviteCode{}, time.Time{}, fmt.Errorf("save invite: %w", err)
 	}
 	return code, inv.expires, nil
 }
@@ -195,8 +195,8 @@ func (s *service) FinishLogin(ctx context.Context, cb Callback) (Profile, error)
 	if err != nil {
 		return nil, fmt.Errorf("exchange code: %w", err)
 	}
-	if tok == nil || tok.RefreshToken() == "" {
-		return nil, errors.New("spotify sent no refresh token")
+	if tok == nil {
+		return nil, errors.New("spotify sent no token")
 	}
 	// Before the invite is used up: an account that isn't allowlisted yet can
 	// try again with the same link once the owner added it.
@@ -218,10 +218,10 @@ func (s *service) FinishLogin(ctx context.Context, cb Callback) (Profile, error)
 }
 
 func (s *service) Disconnect(ctx context.Context, code InviteCode) (Profile, error) {
-	if code == nil {
+	if code.IsZero() {
 		return nil, ErrInvalidInvite
 	}
-	inv, err := s.takeInvite(ctx, hashInvite(code))
+	inv, err := s.takeInvite(ctx, code.Hash())
 	if err != nil {
 		return nil, err
 	}
@@ -232,10 +232,10 @@ func (s *service) Disconnect(ctx context.Context, code InviteCode) (Profile, err
 }
 
 func (s *service) checkInvite(ctx context.Context, code InviteCode) (Invite, error) {
-	if code == nil {
+	if code.IsZero() {
 		return nil, ErrInvalidInvite
 	}
-	inv, err := s.invites.Invite(ctx, hashInvite(code))
+	inv, err := s.invites.Invite(ctx, code.Hash())
 	return s.validInvite(inv, err)
 }
 
@@ -250,7 +250,7 @@ func (s *service) validInvite(inv Invite, err error) (Invite, error) {
 		return nil, ErrInvalidInvite
 	case err != nil:
 		return nil, fmt.Errorf("load invite: %w", err)
-	case inv == nil || inv.ProfileID() == nil:
+	case inv == nil || inv.ProfileID().IsZero():
 		return nil, errors.New("load invite: repository returned an incomplete invite")
 	case s.clock.Now().After(inv.Expires()):
 		return nil, ErrInvalidInvite

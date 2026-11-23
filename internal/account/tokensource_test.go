@@ -27,8 +27,8 @@ func expired(rt string) account.Connection {
 func TestAccessTokenRefreshesAndPersists(t *testing.T) {
 	ctx := context.Background()
 	for name, tc := range map[string]struct{ sent, stored string }{
-		"rotated":  {sent: "r2", stored: "r2"},
-		"not sent": {sent: "", stored: "r1"},
+		"rotated": {sent: "r2", stored: "r2"},
+		"kept":    {sent: "r1", stored: "r1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newEnv(t, nil)
@@ -76,7 +76,7 @@ func TestInvalidateForcesRefresh(t *testing.T) {
 	e := newEnv(t, nil)
 	e.connect(t, connection(token("old", "r1", e.now.Add(time.Hour)), spotifyAccount("jan", "Jan"), time.Time{}))
 	e.oauth.refresh = func(context.Context, string) (account.Token, error) {
-		return token("new", "", e.now.Add(time.Hour)), nil
+		return token("new", "r1", e.now.Add(time.Hour)), nil
 	}
 	ts := e.tokens()
 	if err := ts.Invalidate(ctx, "not-the-stored-one"); err != nil {
@@ -104,7 +104,7 @@ func TestLoginDuringRefreshWins(t *testing.T) {
 	e.oauth.refresh = func(context.Context, string) (account.Token, error) {
 		close(refreshing)
 		<-release
-		return token("old-account-access", "", e.now.Add(time.Hour)), nil
+		return token("old-account-access", "old-account", e.now.Add(time.Hour)), nil
 	}
 	refreshed := make(chan error, 1)
 	go func() {

@@ -7,11 +7,15 @@ import (
 	"syscall"
 )
 
-// lockFile takes an exclusive flock on path, creating it if needed. The lock
-// belongs to this open file, so it also excludes other goroutines and
+// flock takes an exclusive flock on a lock file, creating it if needed. The
+// lock belongs to the open file, so it also excludes other goroutines and
 // processes that open the same path.
-func lockFile(path string) (release func(), err error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+type flock struct{ path string }
+
+func newLocker(path string) locker { return flock{path: path} }
+
+func (l flock) lock() (release func(), err error) {
+	f, err := os.OpenFile(l.path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, err
 	}

@@ -240,8 +240,8 @@ func TestDisconnect(t *testing.T) {
 func TestInvites(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, nil)
-	if _, err := e.svc.Status(ctx, nil); !errors.Is(err, account.ErrInvalidInvite) {
-		t.Fatalf("nil code: %v", err)
+	if _, err := e.svc.Status(ctx, account.InviteCode{}); !errors.Is(err, account.ErrInvalidInvite) {
+		t.Fatalf("zero code: %v", err)
 	}
 	unknown, err := account.ParseInviteCode(strings.Repeat("a", 43))
 	if err != nil {
@@ -255,8 +255,8 @@ func TestInvites(t *testing.T) {
 	if _, err := e.svc.StartLogin(ctx, code); !errors.Is(err, account.ErrInvalidInvite) {
 		t.Fatalf("expired invite accepted: %v", err)
 	}
-	if _, _, err := e.svc.CreateInvite(ctx, nil, time.Hour); err == nil {
-		t.Fatal("nil profile accepted")
+	if _, _, err := e.svc.CreateInvite(ctx, account.ProfileID{}, time.Hour); err == nil {
+		t.Fatal("zero profile accepted")
 	}
 	if _, _, err := e.svc.CreateInvite(ctx, profile, 0); err == nil {
 		t.Fatal("zero TTL accepted")
@@ -342,8 +342,10 @@ func TestProfiles(t *testing.T) {
 }
 
 func TestEntityConstructors(t *testing.T) {
-	if _, err := account.NewToken("", "", time.Time{}); err == nil {
-		t.Error("empty token accepted")
+	for _, tc := range [][2]string{{"", ""}, {"a", ""}, {"", "r"}} {
+		if _, err := account.NewToken(tc[0], tc[1], time.Time{}); err == nil {
+			t.Errorf("token %q accepted", tc)
+		}
 	}
 	if _, err := account.NewSpotifyAccount("", "Jan"); err == nil {
 		t.Error("account without ID accepted")
@@ -356,9 +358,8 @@ func TestEntityConstructors(t *testing.T) {
 		tok account.Token
 		acc account.SpotifyAccount
 	}{
-		"no token":         {nil, acc},
-		"no refresh token": {token("a", "", time.Time{}), acc},
-		"no account":       {tok, nil},
+		"no token":   {nil, acc},
+		"no account": {tok, nil},
 	} {
 		if _, err := account.NewConnection(c.tok, c.acc, time.Time{}); err == nil {
 			t.Errorf("%s: accepted", name)

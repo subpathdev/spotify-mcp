@@ -89,13 +89,9 @@ func (o *oauth) Refresh(ctx context.Context, refreshToken string) (account.Token
 	if err != nil {
 		return nil, mapOAuthError(err)
 	}
-	// oauth2 copies the old refresh token when Spotify sends none; report the
-	// new one only if it changed.
-	rt := t.RefreshToken
-	if rt == refreshToken {
-		rt = ""
-	}
-	return account.NewToken(t.AccessToken, rt, t.Expiry)
+	// Spotify doesn't always send a new refresh token; oauth2 then keeps the
+	// old one, so the token always has both.
+	return account.NewToken(t.AccessToken, t.RefreshToken, t.Expiry)
 }
 
 func mapOAuthError(err error) error {

@@ -106,7 +106,8 @@ type OAuth interface {
 	AuthCodeURL(state, verifier string) string
 	// Exchange trades a callback code for a token.
 	Exchange(ctx context.Context, code, verifier string) (Token, error)
-	// Refresh returns a new access token, or ErrRevoked.
+	// Refresh returns a new token, or ErrRevoked. When Spotify keeps the
+	// refresh token, the returned token carries the old one.
 	Refresh(ctx context.Context, refreshToken string) (Token, error)
 }
 

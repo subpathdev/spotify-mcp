@@ -111,7 +111,7 @@ func (s *service) Search(ctx context.Context, query string, kind Kind, limit int
 }
 
 func (s *service) Play(ctx context.Context, selector string, uri URI) (Device, error) {
-	if uri == nil {
+	if uri.IsZero() {
 		return nil, errors.New("no URI to play")
 	}
 	return s.control(ctx, selector, func(id DeviceID) error { return s.spotify.Play(ctx, id, uri) })
@@ -159,9 +159,9 @@ func (s *service) control(ctx context.Context, selector string, cmd func(DeviceI
 	if err != nil {
 		return nil, err
 	}
-	var id DeviceID // nil: the active device
+	var id DeviceID // zero: the active device
 	if dev != nil {
-		if id = dev.ID(); id == nil {
+		if id = dev.ID(); id.IsZero() {
 			return nil, fmt.Errorf("the device %q has no ID and can't be controlled", dev.Name())
 		}
 	}
@@ -188,7 +188,7 @@ func (s *service) resolve(ctx context.Context, selector string) (Device, error) 
 		return nil, err
 	}
 	for _, d := range devs {
-		if (d.ID() != nil && d.ID().String() == selector) || strings.EqualFold(d.Name(), selector) {
+		if (!d.ID().IsZero() && d.ID().String() == selector) || strings.EqualFold(d.Name(), selector) {
 			return d, nil
 		}
 	}
