@@ -157,7 +157,9 @@ func TestValues(t *testing.T) {
 	if Kinds()[0] != KindTrack() {
 		t.Fatal("Kinds shared its slice")
 	}
-	if must(ParseURI("spotify:track:1")) != must(ParseURI("spotify:track:1")) {
+	// Two separately parsed URIs with the same text are equal with ==.
+	a, b := must(ParseURI("spotify:track:1")), must(ParseURI(" spotify:track:1 "))
+	if a != b {
 		t.Fatal("equal URIs compare unequal")
 	}
 	for _, s := range []string{"", " ", "a b"} {
