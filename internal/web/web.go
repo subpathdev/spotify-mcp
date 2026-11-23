@@ -66,14 +66,18 @@ func securityHeaders(next http.Handler) http.Handler {
 }
 
 func (h *handler) connectPage(w http.ResponseWriter, r *http.Request) {
-	code := account.InviteCode(r.URL.Query().Get("invite"))
+	code, err := account.ParseInviteCode(r.URL.Query().Get("invite"))
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
 	st, err := h.c.Status(r.Context(), code)
 	if err != nil {
 		h.fail(w, err)
 		return
 	}
 	acc, connected := st.Profile.Account()
-	d := pageData{Title: "Connect Spotify", Invite: string(code), ShowForm: true, Connected: connected}
+	d := pageData{Title: "Connect Spotify", Invite: code.Secret(), ShowForm: true, Connected: connected}
 	if connected {
 		d.Name = acc.Name()
 		if !st.ConnectedAt.IsZero() {
@@ -89,7 +93,11 @@ func (h *handler) connectPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	code := account.InviteCode(r.PostForm.Get("invite"))
+	code, err := account.ParseInviteCode(r.PostForm.Get("invite"))
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
 	switch r.PostForm.Get("action") {
 	case "connect":
 		login, err := h.c.StartLogin(r.Context(), code)
@@ -105,7 +113,7 @@ func (h *handler) connectPost(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, err)
 			return
 		}
-		h.log.Info("spotify account disconnected", "profile", profile.ID())
+		h.log.Info("spotify account disconnected", "profile", profile.ID().String())
 		h.render(w, http.StatusOK, pageData{
 			Title:   "Disconnected",
 			Message: "The Spotify account is disconnected and its token deleted. To also remove the app on Spotify's side, open spotify.com → Account → Manage apps.",
@@ -128,7 +136,7 @@ func (h *handler) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	acc, _ := profile.Account()
-	h.log.Info("spotify account connected", "profile", profile.ID(), "spotify_user", acc.ID)
+	h.log.Info("spotify account connected", "profile", profile.ID().String(), "spotify_user", acc.ID)
 	msg := "Spotify is connected. You can close this page."
 	if name := acc.Name(); name != "" {
 		msg = "Spotify is connected as " + name + ". You can close this page."

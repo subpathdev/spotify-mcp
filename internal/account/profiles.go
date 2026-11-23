@@ -27,6 +27,9 @@ func (p profiles) Profile(ctx context.Context, id ProfileID) (Profile, error) {
 }
 
 func loadProfile(ctx context.Context, tokens Tokens, id ProfileID) (*profile, error) {
+	if id == nil {
+		return nil, errors.New("no profile given")
+	}
 	c, err := tokens.Connection(ctx, id)
 	switch {
 	case errors.Is(err, ErrNotFound):

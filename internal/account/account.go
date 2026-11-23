@@ -9,24 +9,8 @@ package account
 import (
 	"context"
 	"errors"
-	"fmt"
-	"regexp"
 	"time"
 )
-
-// ProfileID identifies a profile: 1-63 lower-case letters, digits and
-// dashes. Adapters use it in file and key names. Get one from ParseProfileID.
-type ProfileID string
-
-var profileRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
-
-// ParseProfileID checks a profile ID.
-func ParseProfileID(s string) (ProfileID, error) {
-	if !profileRe.MatchString(s) {
-		return "", fmt.Errorf("invalid profile %q: use 1-63 lower-case letters, digits and dashes", s)
-	}
-	return ProfileID(s), nil
-}
 
 // Profile is one slot a Spotify account can be connected to, as it was when
 // it was loaded (see Profiles). Phase 1 uses a single profile; more about a
@@ -59,7 +43,7 @@ func (p *profile) ID() ProfileID                   { return p.id }
 func (p *profile) Account() (SpotifyAccount, bool) { return p.account, p.connected }
 
 // String makes a profile print as its ID in logs and messages.
-func (p *profile) String() string { return string(p.id) }
+func (p *profile) String() string { return p.id.String() }
 
 // SpotifyAccount is the Spotify account connected to a profile.
 type SpotifyAccount struct {
@@ -94,20 +78,6 @@ type Connection struct {
 
 func (c Connection) accessValid(now time.Time) bool {
 	return c.Token.AccessToken != "" && now.Add(expiryDelta).Before(c.Token.Expiry)
-}
-
-// InviteCode is the secret part of an invite link. It is only ever shown
-// once; repositories see its hash.
-type InviteCode string
-
-// InviteHash identifies an invite in a repository.
-type InviteHash string
-
-// Invite lets whoever holds its code connect or disconnect one profile.
-type Invite struct {
-	Hash      InviteHash
-	ProfileID ProfileID
-	Expires   time.Time
 }
 
 // Errors returned by this package and by the ports' implementations.

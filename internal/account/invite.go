@@ -2,6 +2,7 @@ package account
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -20,20 +21,20 @@ func NewInviter(invites Invites, opts ...Option) *Inviter {
 
 // CreateInvite returns a new one-time code for the profile and when it expires.
 func (i *Inviter) CreateInvite(ctx context.Context, id ProfileID, ttl time.Duration) (InviteCode, time.Time, error) {
-	if _, err := ParseProfileID(string(id)); err != nil {
-		return "", time.Time{}, err
+	if id == nil {
+		return nil, time.Time{}, errors.New("invite needs a profile")
 	}
 	if ttl <= 0 {
-		return "", time.Time{}, fmt.Errorf("invite TTL must be positive, got %s", ttl)
+		return nil, time.Time{}, fmt.Errorf("invite TTL must be positive, got %s", ttl)
 	}
-	code := InviteCode(randomString())
+	code := newInviteCode()
 	now := i.now()
-	inv := Invite{Hash: hashInvite(code), ProfileID: id, Expires: now.Add(ttl)}
+	inv := &invite{hash: hashInvite(code), profileID: id, expires: now.Add(ttl)}
 	if err := i.invites.PruneInvites(ctx, now); err != nil {
-		return "", time.Time{}, fmt.Errorf("prune invites: %w", err)
+		return nil, time.Time{}, fmt.Errorf("prune invites: %w", err)
 	}
 	if err := i.invites.AddInvite(ctx, inv); err != nil {
-		return "", time.Time{}, fmt.Errorf("save invite: %w", err)
+		return nil, time.Time{}, fmt.Errorf("save invite: %w", err)
 	}
-	return code, inv.Expires, nil
+	return code, inv.expires, nil
 }

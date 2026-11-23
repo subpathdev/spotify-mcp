@@ -66,18 +66,18 @@ func (r connectionRecord) connection() account.Connection {
 }
 
 // inviteRecord is the on-disk format of an invite; invites.json maps the
-// invite hash to it.
+// invite hash (hex) to it.
 type inviteRecord struct {
 	Profile string    `json:"profile"`
 	Expires time.Time `json:"expires"`
 }
 
-func (r inviteRecord) invite(h account.InviteHash) (account.Invite, error) {
-	id, err := account.ParseProfileID(r.Profile)
+func (r inviteRecord) invite(hash string) (account.Invite, error) {
+	inv, err := account.RestoreInvite(hash, r.Profile, r.Expires)
 	if err != nil {
-		return account.Invite{}, fmt.Errorf("invite %s: %w", h, err)
+		return nil, fmt.Errorf("invite %s: %w", hash, err)
 	}
-	return account.Invite{Hash: h, ProfileID: id, Expires: r.Expires}, nil
+	return inv, nil
 }
 
 // lock takes the in-process and the cross-process lock.
@@ -92,12 +92,16 @@ func (s *Store) lock() (unlock func(), err error) {
 }
 
 func (s *Store) connectionPath(id account.ProfileID) (string, error) {
-	// IDs are validated when parsed; check again because a ProfileID can also
-	// be made by conversion, and it ends up in a file name.
-	if _, err := account.ParseProfileID(string(id)); err != nil {
+	if id == nil {
+		return "", errors.New("no profile given")
+	}
+	// Only account.ParseProfileID creates IDs, but a type embedding one could
+	// still override String(); check again because it ends up in a file name.
+	name := id.String()
+	if _, err := account.ParseProfileID(name); err != nil {
 		return "", err
 	}
-	return filepath.Join(s.dir, "tokens", string(id)+".json"), nil
+	return filepath.Join(s.dir, "tokens", name+".json"), nil
 }
 
 // Connection implements account.Tokens.
@@ -173,8 +177,8 @@ func (s *Store) DeleteConnection(_ context.Context, id account.ProfileID) error 
 
 func (s *Store) invitePath() string { return filepath.Join(s.dir, "invites.json") }
 
-func (s *Store) loadInvites() (map[account.InviteHash]inviteRecord, error) {
-	inv := map[account.InviteHash]inviteRecord{}
+func (s *Store) loadInvites() (map[string]inviteRecord, error) {
+	inv := map[string]inviteRecord{}
 	if err := readJSON(s.invitePath(), &inv); err != nil && !errors.Is(err, account.ErrNotFound) {
 		return nil, err
 	}
@@ -182,7 +186,7 @@ func (s *Store) loadInvites() (map[account.InviteHash]inviteRecord, error) {
 }
 
 // changeInvites runs fn on the invites under the lock and writes them back.
-func (s *Store) changeInvites(fn func(map[account.InviteHash]inviteRecord) error) error {
+func (s *Store) changeInvites(fn func(map[string]inviteRecord) error) error {
 	unlock, err := s.lock()
 	if err != nil {
 		return err
@@ -200,43 +204,53 @@ func (s *Store) changeInvites(fn func(map[account.InviteHash]inviteRecord) error
 
 // AddInvite implements account.Invites.
 func (s *Store) AddInvite(_ context.Context, i account.Invite) error {
-	return s.changeInvites(func(inv map[account.InviteHash]inviteRecord) error {
-		inv[i.Hash] = inviteRecord{Profile: string(i.ProfileID), Expires: i.Expires}
+	if i == nil || i.Hash() == nil || i.ProfileID() == nil {
+		return errors.New("incomplete invite")
+	}
+	return s.changeInvites(func(inv map[string]inviteRecord) error {
+		inv[i.Hash().String()] = inviteRecord{Profile: i.ProfileID().String(), Expires: i.Expires()}
 		return nil
 	})
 }
 
 // Invite implements account.Invites.
 func (s *Store) Invite(_ context.Context, h account.InviteHash) (account.Invite, error) {
+	if h == nil {
+		return nil, account.ErrNotFound
+	}
 	unlock, err := s.lock()
 	if err != nil {
-		return account.Invite{}, err
+		return nil, err
 	}
 	defer unlock()
 	inv, err := s.loadInvites()
 	if err != nil {
-		return account.Invite{}, err
+		return nil, err
 	}
-	r, ok := inv[h]
+	r, ok := inv[h.String()]
 	if !ok {
-		return account.Invite{}, account.ErrNotFound
+		return nil, account.ErrNotFound
 	}
-	return r.invite(h)
+	return r.invite(h.String())
 }
 
 // TakeInvite implements account.Invites.
 func (s *Store) TakeInvite(_ context.Context, h account.InviteHash) (account.Invite, error) {
+	if h == nil {
+		return nil, account.ErrNotFound
+	}
+	key := h.String()
 	var out account.Invite
-	err := s.changeInvites(func(inv map[account.InviteHash]inviteRecord) error {
-		r, ok := inv[h]
+	err := s.changeInvites(func(inv map[string]inviteRecord) error {
+		r, ok := inv[key]
 		if !ok {
 			return account.ErrNotFound
 		}
-		i, err := r.invite(h)
+		i, err := r.invite(key)
 		if err != nil {
 			return err // nothing is written, so the invite stays until it expires
 		}
-		delete(inv, h)
+		delete(inv, key)
 		out = i
 		return nil
 	})
@@ -245,7 +259,7 @@ func (s *Store) TakeInvite(_ context.Context, h account.InviteHash) (account.Inv
 
 // PruneInvites implements account.Invites.
 func (s *Store) PruneInvites(_ context.Context, t time.Time) error {
-	return s.changeInvites(func(inv map[account.InviteHash]inviteRecord) error {
+	return s.changeInvites(func(inv map[string]inviteRecord) error {
 		for h, r := range inv {
 			if r.Expires.Before(t) {
 				delete(inv, h)

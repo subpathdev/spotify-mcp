@@ -88,7 +88,7 @@ func (c Config) RequireCredentials() error {
 // InviteURL is the link that opens the connect page with code.
 func (c Config) InviteURL(code account.InviteCode) string {
 	u := c.PublicURL.JoinPath("connect")
-	u.RawQuery = url.Values{"invite": {string(code)}}.Encode()
+	u.RawQuery = url.Values{"invite": {code.Secret()}}.Encode()
 	return u.String()
 }
 

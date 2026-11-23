@@ -3,10 +3,8 @@ package account
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -78,7 +76,7 @@ func (s *Service) Status(ctx context.Context, code InviteCode) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	p, err := loadProfile(ctx, s.tokens, inv.ProfileID)
+	p, err := loadProfile(ctx, s.tokens, inv.ProfileID())
 	if err != nil {
 		return Status{}, err
 	}
@@ -106,7 +104,7 @@ func (s *Service) StartLogin(ctx context.Context, code InviteCode) (Login, error
 		return Login{}, ErrTooManyLogins
 	}
 	s.pending[state] = pendingLogin{
-		invite: inv.Hash, profile: inv.ProfileID,
+		invite: inv.Hash(), profile: inv.ProfileID(),
 		verifier: verifier, nonce: nonce, expires: now.Add(LoginTTL),
 	}
 	return Login{URL: s.oauth.AuthCodeURL(state, verifier), Nonce: nonce}, nil
@@ -157,19 +155,22 @@ func (s *Service) FinishLogin(ctx context.Context, cb Callback) (Profile, error)
 // Disconnect uses up the invite and deletes its profile's connection. It
 // returns the profile, now without an account.
 func (s *Service) Disconnect(ctx context.Context, code InviteCode) (Profile, error) {
+	if code == nil {
+		return nil, ErrInvalidInvite
+	}
 	inv, err := s.takeInvite(ctx, hashInvite(code))
 	if err != nil {
 		return nil, err
 	}
-	if err := s.tokens.DeleteConnection(ctx, inv.ProfileID); err != nil {
+	if err := s.tokens.DeleteConnection(ctx, inv.ProfileID()); err != nil {
 		return nil, fmt.Errorf("delete connection: %w", err)
 	}
-	return newProfile(inv.ProfileID, nil), nil
+	return newProfile(inv.ProfileID(), nil), nil
 }
 
 func (s *Service) checkInvite(ctx context.Context, code InviteCode) (Invite, error) {
-	if code == "" {
-		return Invite{}, ErrInvalidInvite
+	if code == nil {
+		return nil, ErrInvalidInvite
 	}
 	inv, err := s.invites.Invite(ctx, hashInvite(code))
 	return s.validInvite(inv, err)
@@ -183,20 +184,15 @@ func (s *Service) takeInvite(ctx context.Context, h InviteHash) (Invite, error) 
 func (s *Service) validInvite(inv Invite, err error) (Invite, error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return Invite{}, ErrInvalidInvite
+		return nil, ErrInvalidInvite
 	case err != nil:
-		return Invite{}, fmt.Errorf("load invite: %w", err)
-	case s.now().After(inv.Expires):
-		return Invite{}, ErrInvalidInvite
+		return nil, fmt.Errorf("load invite: %w", err)
+	case inv == nil || inv.ProfileID() == nil:
+		return nil, errors.New("load invite: repository returned an incomplete invite")
+	case s.now().After(inv.Expires()):
+		return nil, ErrInvalidInvite
 	}
 	return inv, nil
-}
-
-// hashInvite: only the SHA-256 of a code is stored, so reading the storage
-// doesn't give anyone a usable link.
-func hashInvite(code InviteCode) InviteHash {
-	sum := sha256.Sum256([]byte(code))
-	return InviteHash(hex.EncodeToString(sum[:]))
 }
 
 // randomString returns 256 random bits, base64url-encoded (43 characters,

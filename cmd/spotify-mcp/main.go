@@ -100,11 +100,11 @@ func serve(log *slog.Logger) error {
 	// tools report it when they need the token.
 	prof, err := account.NewProfiles(store).Profile(context.Background(), cfg.ProfileID)
 	if err != nil {
-		log.Warn("can't read the connected account", "profile", cfg.ProfileID, "err", err)
+		log.Warn("can't read the connected account", "profile", cfg.ProfileID.String(), "err", err)
 	} else if acc, ok := prof.Account(); ok {
-		log.Info("spotify account connected", "profile", prof.ID(), "spotify_user", acc.ID)
+		log.Info("spotify account connected", "profile", prof.ID().String(), "spotify_user", acc.ID)
 	} else {
-		log.Warn("no Spotify account connected yet; run 'spotify-mcp invite' and open the link", "profile", prof.ID())
+		log.Warn("no Spotify account connected yet; run 'spotify-mcp invite' and open the link", "profile", prof.ID().String())
 	}
 
 	servers := []*http.Server{
@@ -121,7 +121,7 @@ func serve(log *slog.Logger) error {
 			WriteTimeout:      30 * time.Second,
 		},
 	}
-	log.Info("spotify-mcp started", "version", version, "profile", cfg.ProfileID, "connect_url", cfg.PublicURL.JoinPath("connect").String())
+	log.Info("spotify-mcp started", "version", version, "profile", cfg.ProfileID.String(), "connect_url", cfg.PublicURL.JoinPath("connect").String())
 	return run(log, servers)
 }
 

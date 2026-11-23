@@ -3,9 +3,9 @@ package filestore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,7 +13,26 @@ import (
 	"github.com/subpathdev/spotify-mcp/internal/account"
 )
 
-const profile = account.ProfileID("default")
+var profile = mustProfileID("default")
+
+// mustProfileID parses a profile ID that the test knows to be valid.
+func mustProfileID(s string) account.ProfileID {
+	id, err := account.ParseProfileID(s)
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+// testInvite is a valid invite whose hash is n in hex.
+func testInvite(t *testing.T, n int, expires time.Time) account.Invite {
+	t.Helper()
+	inv, err := account.RestoreInvite(fmt.Sprintf("%064x", n), "default", expires)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return inv
+}
 
 func open(t *testing.T, dir string) *Store {
 	t.Helper()
@@ -78,11 +97,8 @@ func TestUpdateConnection(t *testing.T) {
 
 func TestRejectsBadProfile(t *testing.T) {
 	s := open(t, t.TempDir())
-	// A ProfileID made by conversion skips ParseProfileID.
-	for _, id := range []account.ProfileID{"../x", ""} {
-		if err := s.SaveConnection(context.Background(), id, account.Connection{}); err == nil {
-			t.Fatalf("profile %q accepted", id)
-		}
+	if err := s.SaveConnection(context.Background(), nil, account.Connection{}); err == nil {
+		t.Fatal("nil profile accepted")
 	}
 }
 
@@ -90,11 +106,11 @@ func TestInviteTakenOnce(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	s := open(t, dir)
-	inv := account.Invite{Hash: "h1", ProfileID: profile, Expires: time.Now().Add(time.Hour)}
+	inv := testInvite(t, 1, time.Now().Add(time.Hour))
 	if err := s.AddInvite(ctx, inv); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.Invite(ctx, "h1"); err != nil || got.ProfileID != profile {
+	if got, err := s.Invite(ctx, inv.Hash()); err != nil || got.ProfileID() != profile || got.Hash() != inv.Hash() {
 		t.Fatalf("invite: %+v %v", got, err)
 	}
 
@@ -109,7 +125,7 @@ func TestInviteTakenOnce(t *testing.T) {
 			st = other
 		}
 		wg.Go(func() {
-			if _, err := st.TakeInvite(ctx, "h1"); err == nil {
+			if _, err := st.TakeInvite(ctx, inv.Hash()); err == nil {
 				mu.Lock()
 				taken++
 				mu.Unlock()
@@ -133,15 +149,14 @@ func TestConcurrentInvitesFromTwoStores(t *testing.T) {
 			st = b
 		}
 		wg.Go(func() {
-			h := account.InviteHash(strings.Repeat("x", i+1))
-			if err := st.AddInvite(ctx, account.Invite{Hash: h, ProfileID: profile, Expires: time.Now().Add(time.Hour)}); err != nil {
+			if err := st.AddInvite(ctx, testInvite(t, i, time.Now().Add(time.Hour))); err != nil {
 				t.Error(err)
 			}
 		})
 	}
 	wg.Wait()
 	for i := range 20 {
-		if _, err := a.Invite(ctx, account.InviteHash(strings.Repeat("x", i+1))); err != nil {
+		if _, err := a.Invite(ctx, testInvite(t, i, time.Now()).Hash()); err != nil {
 			t.Errorf("invite %d lost: %v", i, err)
 		}
 	}
@@ -151,15 +166,16 @@ func TestPruneInvites(t *testing.T) {
 	ctx := context.Background()
 	s := open(t, t.TempDir())
 	now := time.Now()
-	_ = s.AddInvite(ctx, account.Invite{Hash: "old", ProfileID: profile, Expires: now.Add(-time.Minute)})
-	_ = s.AddInvite(ctx, account.Invite{Hash: "new", ProfileID: profile, Expires: now.Add(time.Minute)})
+	old, cur := testInvite(t, 1, now.Add(-time.Minute)), testInvite(t, 2, now.Add(time.Minute))
+	_ = s.AddInvite(ctx, old)
+	_ = s.AddInvite(ctx, cur)
 	if err := s.PruneInvites(ctx, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Invite(ctx, "old"); !errors.Is(err, account.ErrNotFound) {
+	if _, err := s.Invite(ctx, old.Hash()); !errors.Is(err, account.ErrNotFound) {
 		t.Fatalf("expired invite kept: %v", err)
 	}
-	if _, err := s.Invite(ctx, "new"); err != nil {
+	if _, err := s.Invite(ctx, cur.Hash()); err != nil {
 		t.Fatalf("valid invite pruned: %v", err)
 	}
 }

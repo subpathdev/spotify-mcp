@@ -73,7 +73,16 @@ func newEnv(t *testing.T) *env {
 	return &env{srv: srv, inviter: account.NewInviter(st), store: st, identity: id}
 }
 
-const profile = account.ProfileID("default")
+var profile = mustProfileID("default")
+
+// mustProfileID parses a profile ID that the test knows to be valid.
+func mustProfileID(s string) account.ProfileID {
+	id, err := account.ParseProfileID(s)
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
 
 func (e *env) invite(t *testing.T) string {
 	t.Helper()
@@ -81,7 +90,7 @@ func (e *env) invite(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(code)
+	return code.Secret()
 }
 
 // browser is a client with its own cookies that doesn't follow redirects.

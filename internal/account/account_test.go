@@ -3,7 +3,9 @@ package account_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,7 +14,16 @@ import (
 	"github.com/subpathdev/spotify-mcp/internal/filestore"
 )
 
-const profile = account.ProfileID("default")
+var profile = mustProfileID("default")
+
+// mustProfileID parses a profile ID that the test knows to be valid.
+func mustProfileID(s string) account.ProfileID {
+	id, err := account.ParseProfileID(s)
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
 
 // fakeOAuth issues tokens for the code "good" and the verifier of the last
 // started login.
@@ -205,18 +216,23 @@ func TestDisconnect(t *testing.T) {
 func TestInvites(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, nil)
-	for _, code := range []account.InviteCode{"", "unknown"} {
-		if _, err := e.svc.Status(ctx, code); !errors.Is(err, account.ErrInvalidInvite) {
-			t.Fatalf("code %q: %v", code, err)
-		}
+	if _, err := e.svc.Status(ctx, nil); !errors.Is(err, account.ErrInvalidInvite) {
+		t.Fatalf("nil code: %v", err)
+	}
+	unknown, err := account.ParseInviteCode(strings.Repeat("a", 43))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.Status(ctx, unknown); !errors.Is(err, account.ErrInvalidInvite) {
+		t.Fatalf("unknown code: %v", err)
 	}
 	code := e.invite(t)
 	e.now = e.now.Add(2 * time.Hour)
 	if _, err := e.svc.StartLogin(ctx, code); !errors.Is(err, account.ErrInvalidInvite) {
 		t.Fatalf("expired invite accepted: %v", err)
 	}
-	if _, _, err := e.inviter.CreateInvite(ctx, "../x", time.Hour); err == nil {
-		t.Fatal("invalid profile accepted")
+	if _, _, err := e.inviter.CreateInvite(ctx, nil, time.Hour); err == nil {
+		t.Fatal("nil profile accepted")
 	}
 	if _, _, err := e.inviter.CreateInvite(ctx, profile, 0); err == nil {
 		t.Fatal("zero TTL accepted")
@@ -229,8 +245,51 @@ func TestParseProfileID(t *testing.T) {
 			t.Errorf("%q accepted", s)
 		}
 	}
-	if id, err := account.ParseProfileID("jan-2"); err != nil || id != "jan-2" {
-		t.Fatalf("valid profile: %q %v", id, err)
+	a, err := account.ParseProfileID("jan-2")
+	if err != nil || a.String() != "jan-2" {
+		t.Fatalf("valid profile: %v %v", a, err)
+	}
+	if b := mustProfileID("jan-2"); a != b {
+		t.Fatal("equal IDs compare unequal")
+	}
+	if a == profile {
+		t.Fatal("different IDs compare equal")
+	}
+}
+
+func TestParseInviteCode(t *testing.T) {
+	for _, s := range []string{"", "unknown", strings.Repeat("a", 42), strings.Repeat("a", 44), strings.Repeat("a", 42) + "="} {
+		if _, err := account.ParseInviteCode(s); !errors.Is(err, account.ErrInvalidInvite) {
+			t.Errorf("%q: %v", s, err)
+		}
+	}
+	code, err := account.ParseInviteCode(strings.Repeat("a", 42) + "_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := fmt.Sprint(code); strings.Contains(s, "aaaa") {
+		t.Fatalf("code printed: %s", s)
+	}
+}
+
+func TestRestoreInvite(t *testing.T) {
+	hash, exp := strings.Repeat("0", 64), time.Now()
+	for name, tc := range map[string]struct {
+		hash, profile string
+		exp           time.Time
+	}{
+		"short hash":  {"abc", "default", exp},
+		"upper hash":  {strings.Repeat("A", 64), "default", exp},
+		"bad profile": {hash, "../x", exp},
+		"no expiry":   {hash, "default", time.Time{}},
+	} {
+		if _, err := account.RestoreInvite(tc.hash, tc.profile, tc.exp); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	inv, err := account.RestoreInvite(hash, "default", exp)
+	if err != nil || inv.Hash().String() != hash || inv.ProfileID() != profile || !inv.Expires().Equal(exp) {
+		t.Fatalf("restore: %v %v", inv, err)
 	}
 }
 
