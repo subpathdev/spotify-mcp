@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -16,14 +17,31 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.PublicURL.String() != "https://spotify.example.com" || c.ProfileID.String() != "default" || c.DataDir != "/data" || c.MCPAddr != ":8000" {
-		t.Fatalf("%+v", c)
+	if c.ConnectURL() != "https://spotify.example.com/connect" || c.ProfileID().String() != "default" || c.DataDir() != "/data" || c.MCPAddr() != ":8000" {
+		t.Fatalf("%v", c)
 	}
 	if err := c.RequireCredentials(); err == nil || !strings.Contains(err.Error(), "SPOTIFY_CLIENT_SECRET") {
 		t.Fatalf("credentials: %v", err)
 	}
 	if got := c.InviteURL(mustCode(t, "a-b_c"+strings.Repeat("x", 38))); got != "https://spotify.example.com/connect?invite=a-b_c"+strings.Repeat("x", 38) {
 		t.Fatalf("invite URL %q", got)
+	}
+}
+
+func TestSecretStaysOutOfPrint(t *testing.T) {
+	c, err := Load(envOf(map[string]string{
+		"SPOTIFY_REDIRECT_URI": "https://spotify.example.com/callback", "SPOTIFY_CLIENT_SECRET": "s3cret-value",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ClientSecret() != "s3cret-value" {
+		t.Fatal("secret not loaded")
+	}
+	for _, s := range []string{fmt.Sprint(c), fmt.Sprintf("%v", c), fmt.Sprintf("%+v", c)} {
+		if strings.Contains(s, "s3cret") {
+			t.Fatalf("secret printed: %s", s)
+		}
 	}
 }
 

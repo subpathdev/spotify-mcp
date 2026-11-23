@@ -9,13 +9,37 @@ import (
 
 // Service controls playback. Devices are chosen by a selector: a device ID,
 // a name, a unique part of a name, or a device type ("smartphone"). An empty
-// selector means the active device.
-type Service struct {
+// selector means the active device; methods then return a nil Device.
+type Service interface {
+	// Devices lists the devices Spotify currently sees.
+	Devices(ctx context.Context) ([]Device, error)
+	// NowPlaying returns the playback state, or nil when nothing is playing.
+	NowPlaying(ctx context.Context) (State, error)
+	// Search returns up to limit items; limit 0 means a default of 5, and
+	// more than MaxSearchResults is capped.
+	Search(ctx context.Context, query string, kind Kind, limit int) ([]Item, error)
+	// Play plays uri on the selected device.
+	Play(ctx context.Context, selector string, uri URI) (Device, error)
+	// PlayFirst plays the first search result for query.
+	PlayFirst(ctx context.Context, selector, query string, kind Kind) (Item, Device, error)
+	// Resume continues playback.
+	Resume(ctx context.Context, selector string) (Device, error)
+	// Pause pauses playback.
+	Pause(ctx context.Context, selector string) (Device, error)
+	// Next skips to the next item.
+	Next(ctx context.Context, selector string) (Device, error)
+	// Previous goes back to the previous item.
+	Previous(ctx context.Context, selector string) (Device, error)
+	// Transfer moves playback to the selected device, which is required.
+	Transfer(ctx context.Context, selector string, play bool) (Device, error)
+}
+
+type service struct {
 	spotify Spotify
 }
 
 // NewService returns a Service using sp.
-func NewService(sp Spotify) *Service { return &Service{spotify: sp} }
+func NewService(sp Spotify) Service { return &service{spotify: sp} }
 
 // NoActiveDeviceError is returned when Spotify sees no active device. It lists
 // the devices that could be passed instead. It matches ErrNoActiveDevice.
@@ -56,27 +80,23 @@ func (e *DeviceNotFoundError) Error() string {
 func quotedNames(devs []Device, withType bool) string {
 	names := make([]string, len(devs))
 	for i, d := range devs {
-		names[i] = fmt.Sprintf("%q", d.Name)
+		names[i] = fmt.Sprintf("%q", d.Name())
 		if withType {
-			names[i] += " (" + d.Type + ")"
+			names[i] += " (" + d.Type() + ")"
 		}
 	}
 	return strings.Join(names, ", ")
 }
 
-// Devices lists the devices Spotify currently sees.
-func (s *Service) Devices(ctx context.Context) ([]Device, error) {
+func (s *service) Devices(ctx context.Context) ([]Device, error) {
 	return s.spotify.Devices(ctx)
 }
 
-// NowPlaying returns the playback state, or nil when nothing is playing.
-func (s *Service) NowPlaying(ctx context.Context) (*State, error) {
+func (s *service) NowPlaying(ctx context.Context) (State, error) {
 	return s.spotify.State(ctx)
 }
 
-// Search returns up to limit items; limit 0 means a default of 5, and more
-// than MaxSearchResults is capped.
-func (s *Service) Search(ctx context.Context, query string, kind Kind, limit int) ([]Item, error) {
+func (s *service) Search(ctx context.Context, query string, kind Kind, limit int) ([]Item, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, errors.New("search query is empty")
@@ -90,70 +110,60 @@ func (s *Service) Search(ctx context.Context, query string, kind Kind, limit int
 	return s.spotify.Search(ctx, query, kind, limit)
 }
 
-// Play plays uri on the selected device and returns the device (nil for the
-// active one).
-func (s *Service) Play(ctx context.Context, selector string, uri URI) (*Device, error) {
-	if uri.IsZero() {
+func (s *service) Play(ctx context.Context, selector string, uri URI) (Device, error) {
+	if uri == nil {
 		return nil, errors.New("no URI to play")
 	}
 	return s.control(ctx, selector, func(id DeviceID) error { return s.spotify.Play(ctx, id, uri) })
 }
 
-// PlayFirst plays the first search result for query.
-func (s *Service) PlayFirst(ctx context.Context, selector, query string, kind Kind) (Item, *Device, error) {
+func (s *service) PlayFirst(ctx context.Context, selector, query string, kind Kind) (Item, Device, error) {
 	items, err := s.Search(ctx, query, kind, 1)
 	if err != nil {
-		return Item{}, nil, err
+		return nil, nil, err
 	}
 	if len(items) == 0 {
-		return Item{}, nil, fmt.Errorf("nothing found for %q", query)
+		return nil, nil, fmt.Errorf("nothing found for %q", query)
 	}
-	dev, err := s.Play(ctx, selector, items[0].URI)
+	dev, err := s.Play(ctx, selector, items[0].URI())
 	return items[0], dev, err
 }
 
-// Resume continues playback.
-func (s *Service) Resume(ctx context.Context, selector string) (*Device, error) {
+func (s *service) Resume(ctx context.Context, selector string) (Device, error) {
 	return s.control(ctx, selector, func(id DeviceID) error { return s.spotify.Resume(ctx, id) })
 }
 
-// Pause pauses playback.
-func (s *Service) Pause(ctx context.Context, selector string) (*Device, error) {
+func (s *service) Pause(ctx context.Context, selector string) (Device, error) {
 	return s.control(ctx, selector, func(id DeviceID) error { return s.spotify.Pause(ctx, id) })
 }
 
-// Next skips to the next item.
-func (s *Service) Next(ctx context.Context, selector string) (*Device, error) {
+func (s *service) Next(ctx context.Context, selector string) (Device, error) {
 	return s.control(ctx, selector, func(id DeviceID) error { return s.spotify.Next(ctx, id) })
 }
 
-// Previous goes back to the previous item.
-func (s *Service) Previous(ctx context.Context, selector string) (*Device, error) {
+func (s *service) Previous(ctx context.Context, selector string) (Device, error) {
 	return s.control(ctx, selector, func(id DeviceID) error { return s.spotify.Previous(ctx, id) })
 }
 
-// Transfer moves playback to the selected device, which is required here.
-func (s *Service) Transfer(ctx context.Context, selector string, play bool) (Device, error) {
+func (s *service) Transfer(ctx context.Context, selector string, play bool) (Device, error) {
 	if strings.TrimSpace(selector) == "" {
-		return Device{}, errors.New("a device is required; call the devices tool to see the names")
+		return nil, errors.New("a device is required; call the devices tool to see the names")
 	}
-	dev, err := s.control(ctx, selector, func(id DeviceID) error { return s.spotify.Transfer(ctx, id, play) })
-	if err != nil {
-		return Device{}, err
-	}
-	return *dev, nil
+	return s.control(ctx, selector, func(id DeviceID) error { return s.spotify.Transfer(ctx, id, play) })
 }
 
 // control resolves the selector, runs cmd on the device and explains a
 // missing active device.
-func (s *Service) control(ctx context.Context, selector string, cmd func(DeviceID) error) (*Device, error) {
+func (s *service) control(ctx context.Context, selector string, cmd func(DeviceID) error) (Device, error) {
 	dev, err := s.resolve(ctx, selector)
 	if err != nil {
 		return nil, err
 	}
-	var id DeviceID
+	var id DeviceID // nil: the active device
 	if dev != nil {
-		id = dev.ID
+		if id = dev.ID(); id == nil {
+			return nil, fmt.Errorf("the device %q has no ID and can't be controlled", dev.Name())
+		}
 	}
 	if err := cmd(id); err != nil {
 		if errors.Is(err, ErrNoActiveDevice) {
@@ -168,7 +178,7 @@ func (s *Service) control(ctx context.Context, selector string, cmd func(DeviceI
 // resolve finds the device a selector means: exact ID, then exact name
 // (ignoring case), then a single device whose name contains the selector or
 // whose type equals it. An empty selector returns nil, the active device.
-func (s *Service) resolve(ctx context.Context, selector string) (*Device, error) {
+func (s *service) resolve(ctx context.Context, selector string) (Device, error) {
 	selector = strings.TrimSpace(selector)
 	if selector == "" {
 		return nil, nil
@@ -178,19 +188,19 @@ func (s *Service) resolve(ctx context.Context, selector string) (*Device, error)
 		return nil, err
 	}
 	for _, d := range devs {
-		if string(d.ID) == selector || strings.EqualFold(d.Name, selector) {
-			return &d, nil
+		if (d.ID() != nil && d.ID().String() == selector) || strings.EqualFold(d.Name(), selector) {
+			return d, nil
 		}
 	}
 	var matches []Device
 	lower := strings.ToLower(selector)
 	for _, d := range devs {
-		if strings.Contains(strings.ToLower(d.Name), lower) || strings.EqualFold(d.Type, selector) {
+		if strings.Contains(strings.ToLower(d.Name()), lower) || strings.EqualFold(d.Type(), selector) {
 			matches = append(matches, d)
 		}
 	}
 	if len(matches) == 1 {
-		return &matches[0], nil
+		return matches[0], nil
 	}
 	return nil, &DeviceNotFoundError{Selector: selector, Online: devs, Ambiguous: len(matches) > 1}
 }

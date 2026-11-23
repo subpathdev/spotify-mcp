@@ -34,7 +34,22 @@ func testInvite(t *testing.T, n int, expires time.Time) account.Invite {
 	return inv
 }
 
-func open(t *testing.T, dir string) *Store {
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+func testConnection(refresh string) account.Connection {
+	return must(account.NewConnection(
+		must(account.NewToken("a", refresh, time.Date(2026, 11, 22, 13, 0, 0, 0, time.UTC))),
+		must(account.NewSpotifyAccount("jan", "Jan")),
+		time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC),
+	))
+}
+
+func open(t *testing.T, dir string) Store {
 	t.Helper()
 	s, err := Open(dir)
 	if err != nil {
@@ -50,11 +65,7 @@ func TestConnectionRoundTrip(t *testing.T) {
 	if _, err := s.Connection(ctx, profile); !errors.Is(err, account.ErrNotFound) {
 		t.Fatalf("empty store: %v", err)
 	}
-	want := account.Connection{
-		Token:       account.Token{AccessToken: "a", RefreshToken: "r", Expiry: time.Date(2026, 11, 22, 13, 0, 0, 0, time.UTC)},
-		Account:     account.SpotifyAccount{ID: "jan", DisplayName: "Jan"},
-		ConnectedAt: time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC),
-	}
+	want := testConnection("r")
 	if err := s.SaveConnection(ctx, profile, want); err != nil {
 		t.Fatal(err)
 	}
@@ -64,8 +75,13 @@ func TestConnectionRoundTrip(t *testing.T) {
 	}
 	// A second store on the same dir, as after a pod restart, sees it.
 	got, err := open(t, dir).Connection(ctx, profile)
-	if err != nil || got != want {
-		t.Fatalf("got %+v %v, want %+v", got, err, want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gt, wt := got.Token(), want.Token()
+	if gt.AccessToken() != wt.AccessToken() || gt.RefreshToken() != wt.RefreshToken() || !gt.Expiry().Equal(wt.Expiry()) ||
+		got.Account().ID() != "jan" || got.Account().DisplayName() != "Jan" || !got.ConnectedAt().Equal(want.ConnectedAt()) {
+		t.Fatalf("round trip changed the connection: %v %v %v", gt.Expiry(), got.Account().Name(), got.ConnectedAt())
 	}
 	for range 2 {
 		if err := s.DeleteConnection(ctx, profile); err != nil {
@@ -77,28 +93,39 @@ func TestConnectionRoundTrip(t *testing.T) {
 func TestUpdateConnection(t *testing.T) {
 	ctx := context.Background()
 	s := open(t, t.TempDir())
-	noop := func(*account.Connection) error { return nil }
+	noop := func(c account.Connection) (account.Connection, error) { return c, nil }
 	if err := s.UpdateConnection(ctx, profile, noop); !errors.Is(err, account.ErrNotFound) {
 		t.Fatalf("missing: %v", err)
 	}
-	_ = s.SaveConnection(ctx, profile, account.Connection{Token: account.Token{RefreshToken: "r1"}})
+	_ = s.SaveConnection(ctx, profile, testConnection("r1"))
 	boom := errors.New("boom")
-	err := s.UpdateConnection(ctx, profile, func(c *account.Connection) error {
-		c.Token.RefreshToken = "lost"
-		return boom
+	err := s.UpdateConnection(ctx, profile, func(account.Connection) (account.Connection, error) {
+		return testConnection("lost"), boom
 	})
 	if !errors.Is(err, boom) {
 		t.Fatalf("fn error: %v", err)
 	}
-	if c, _ := s.Connection(ctx, profile); c.Token.RefreshToken != "r1" {
+	if c, _ := s.Connection(ctx, profile); c.Token().RefreshToken() != "r1" {
 		t.Fatalf("failed update was written: %+v", c)
 	}
 }
 
-func TestRejectsBadProfile(t *testing.T) {
-	s := open(t, t.TempDir())
-	if err := s.SaveConnection(context.Background(), nil, account.Connection{}); err == nil {
+func TestRejectsBadInput(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s := open(t, dir)
+	if err := s.SaveConnection(ctx, nil, testConnection("r")); err == nil {
 		t.Fatal("nil profile accepted")
+	}
+	if err := s.SaveConnection(ctx, profile, nil); err == nil {
+		t.Fatal("nil connection accepted")
+	}
+	// A damaged file is an error, not a half-empty connection.
+	if err := os.WriteFile(filepath.Join(dir, "tokens", "default.json"), []byte(`{"refresh_token":"r"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Connection(ctx, profile); err == nil || errors.Is(err, account.ErrNotFound) {
+		t.Fatalf("file without account: %v", err)
 	}
 }
 

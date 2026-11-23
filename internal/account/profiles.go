@@ -37,5 +37,5 @@ func loadProfile(ctx context.Context, tokens Tokens, id ProfileID) (*profile, er
 	case err != nil:
 		return nil, fmt.Errorf("load connection: %w", err)
 	}
-	return newProfile(id, &c), nil
+	return newProfile(id, c), nil
 }

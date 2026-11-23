@@ -76,12 +76,12 @@ func (h *handler) connectPage(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	acc, connected := st.Profile.Account()
+	acc, connected := st.Profile().Account()
 	d := pageData{Title: "Connect Spotify", Invite: code.Secret(), ShowForm: true, Connected: connected}
 	if connected {
 		d.Name = acc.Name()
-		if !st.ConnectedAt.IsZero() {
-			d.Since = st.ConnectedAt.Format(time.DateOnly)
+		if at := st.ConnectedAt(); !at.IsZero() {
+			d.Since = at.Format(time.DateOnly)
 		}
 	}
 	h.render(w, http.StatusOK, d)
@@ -105,8 +105,8 @@ func (h *handler) connectPost(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, err)
 			return
 		}
-		http.SetCookie(w, loginCookie(login.Nonce, int(account.LoginTTL/time.Second)))
-		http.Redirect(w, r, login.URL, http.StatusSeeOther)
+		http.SetCookie(w, loginCookie(login.Nonce(), int(account.LoginTTL/time.Second)))
+		http.Redirect(w, r, login.URL(), http.StatusSeeOther)
 	case "disconnect":
 		profile, err := h.c.Disconnect(r.Context(), code)
 		if err != nil {
@@ -125,21 +125,21 @@ func (h *handler) connectPost(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) callback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	cb := account.Callback{State: q.Get("state"), Code: q.Get("code"), Error: q.Get("error")}
+	var nonce string
 	if c, err := r.Cookie(cookieName); err == nil {
-		cb.Nonce = c.Value
+		nonce = c.Value
 	}
+	cb := account.NewCallback(q.Get("state"), nonce, q.Get("code"), q.Get("error"))
 	http.SetCookie(w, loginCookie("", -1))
 	profile, err := h.c.FinishLogin(r.Context(), cb)
 	if err != nil {
 		h.fail(w, err)
 		return
 	}
-	acc, _ := profile.Account()
-	h.log.Info("spotify account connected", "profile", profile.ID().String(), "spotify_user", acc.ID)
 	msg := "Spotify is connected. You can close this page."
-	if name := acc.Name(); name != "" {
-		msg = "Spotify is connected as " + name + ". You can close this page."
+	if acc, ok := profile.Account(); ok {
+		h.log.Info("spotify account connected", "profile", profile.ID().String(), "spotify_user", acc.ID())
+		msg = "Spotify is connected as " + acc.Name() + ". You can close this page."
 	}
 	h.render(w, http.StatusOK, pageData{Title: "Connected", Message: msg})
 }

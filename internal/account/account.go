@@ -31,10 +31,10 @@ type profile struct {
 }
 
 // newProfile builds a profile from its connection; c is nil if it has none.
-func newProfile(id ProfileID, c *Connection) *profile {
+func newProfile(id ProfileID, c Connection) *profile {
 	p := &profile{id: id}
 	if c != nil {
-		p.account, p.connected, p.connectedAt = c.Account, true, c.ConnectedAt
+		p.account, p.connected, p.connectedAt = c.Account(), true, c.ConnectedAt()
 	}
 	return p
 }
@@ -44,41 +44,6 @@ func (p *profile) Account() (SpotifyAccount, bool) { return p.account, p.connect
 
 // String makes a profile print as its ID in logs and messages.
 func (p *profile) String() string { return p.id.String() }
-
-// SpotifyAccount is the Spotify account connected to a profile.
-type SpotifyAccount struct {
-	ID          string
-	DisplayName string
-}
-
-// Name is what to show a person: the display name, else the account ID.
-func (a SpotifyAccount) Name() string {
-	if a.DisplayName != "" {
-		return a.DisplayName
-	}
-	return a.ID
-}
-
-// Token is an OAuth token pair as Spotify issues it.
-type Token struct {
-	AccessToken  string
-	RefreshToken string // empty when Spotify keeps the old one
-	Expiry       time.Time
-}
-
-// expiryDelta refreshes a little early, so a token doesn't expire in flight.
-const expiryDelta = 30 * time.Second
-
-// Connection is what is stored per profile.
-type Connection struct {
-	Token       Token
-	Account     SpotifyAccount
-	ConnectedAt time.Time
-}
-
-func (c Connection) accessValid(now time.Time) bool {
-	return c.Token.AccessToken != "" && now.Add(expiryDelta).Before(c.Token.Expiry)
-}
 
 // Errors returned by this package and by the ports' implementations.
 var (
@@ -114,9 +79,10 @@ type Tokens interface {
 	// SaveConnection replaces the profile's connection.
 	SaveConnection(ctx context.Context, id ProfileID, c Connection) error
 	// UpdateConnection reads, changes and writes the connection as one step:
-	// no other write to the profile may happen in between. It returns
-	// ErrNotFound if the profile has none, and writes nothing if fn fails.
-	UpdateConnection(ctx context.Context, id ProfileID, fn func(*Connection) error) error
+	// no other write to the profile may happen in between. fn returns the
+	// connection to write. It returns ErrNotFound if the profile has none,
+	// and writes nothing if fn fails.
+	UpdateConnection(ctx context.Context, id ProfileID, fn func(Connection) (Connection, error)) error
 	// DeleteConnection forgets the profile's connection; a missing one is fine.
 	DeleteConnection(ctx context.Context, id ProfileID) error
 }

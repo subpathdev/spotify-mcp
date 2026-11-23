@@ -37,26 +37,29 @@ func (f *fakeOAuth) Exchange(_ context.Context, code, verifier string) (account.
 	defer f.mu.Unlock()
 	for _, v := range f.verifiers {
 		if v == verifier && code == "good" {
-			return account.Token{AccessToken: "a", RefreshToken: "r", Expiry: time.Now().Add(time.Hour)}, nil
+			return account.NewToken("a", "r", time.Now().Add(time.Hour))
 		}
 	}
-	return account.Token{}, errors.New("bad code")
+	return nil, errors.New("bad code")
 }
 
 func (f *fakeOAuth) Refresh(context.Context, string) (account.Token, error) {
-	return account.Token{}, errors.New("unused")
+	return nil, errors.New("unused")
 }
 
 type fakeIdentity struct{ err error }
 
 func (f *fakeIdentity) Account(context.Context, string) (account.SpotifyAccount, error) {
-	return account.SpotifyAccount{ID: "jan", DisplayName: "Jan"}, f.err
+	if f.err != nil {
+		return nil, f.err
+	}
+	return account.NewSpotifyAccount("jan", "Jan")
 }
 
 type env struct {
 	srv      *httptest.Server
-	inviter  *account.Inviter
-	store    *filestore.Store
+	inviter  account.Inviter
+	store    filestore.Store
 	identity *fakeIdentity
 }
 

@@ -15,17 +15,18 @@ import (
 	"github.com/subpathdev/spotify-mcp/internal/playback"
 )
 
-// Player is what the tools need; *playback.Service implements it.
+// Player is what the tools need; playback.Service implements it. Methods
+// return a nil Device when they acted on the active device.
 type Player interface {
 	Devices(ctx context.Context) ([]playback.Device, error)
-	NowPlaying(ctx context.Context) (*playback.State, error)
+	NowPlaying(ctx context.Context) (playback.State, error)
 	Search(ctx context.Context, query string, kind playback.Kind, limit int) ([]playback.Item, error)
-	Play(ctx context.Context, selector string, uri playback.URI) (*playback.Device, error)
-	PlayFirst(ctx context.Context, selector, query string, kind playback.Kind) (playback.Item, *playback.Device, error)
-	Resume(ctx context.Context, selector string) (*playback.Device, error)
-	Pause(ctx context.Context, selector string) (*playback.Device, error)
-	Next(ctx context.Context, selector string) (*playback.Device, error)
-	Previous(ctx context.Context, selector string) (*playback.Device, error)
+	Play(ctx context.Context, selector string, uri playback.URI) (playback.Device, error)
+	PlayFirst(ctx context.Context, selector, query string, kind playback.Kind) (playback.Item, playback.Device, error)
+	Resume(ctx context.Context, selector string) (playback.Device, error)
+	Pause(ctx context.Context, selector string) (playback.Device, error)
+	Next(ctx context.Context, selector string) (playback.Device, error)
+	Previous(ctx context.Context, selector string) (playback.Device, error)
 	Transfer(ctx context.Context, selector string, play bool) (playback.Device, error)
 }
 
@@ -123,18 +124,19 @@ func (t tools) nowPlaying(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs)
 	if err != nil {
 		return nil, nil, err
 	}
-	if st == nil || st.Item == nil {
+	if st == nil || st.Item() == nil {
 		return text("Nothing is playing on Spotify right now."), nil, nil
 	}
 	state := "Paused"
-	if st.Playing {
+	if st.Playing() {
 		state = "Playing"
 	}
 	dev := "unknown device"
-	if st.Device != nil {
-		dev = st.Device.Name
+	if st.Device() != nil {
+		dev = st.Device().Name()
 	}
-	return text(fmt.Sprintf("%s on %s: %s [%s / %s]", state, dev, formatItem(*st.Item), mmss(st.Progress), mmss(st.Item.Duration))), nil, nil
+	it := st.Item()
+	return text(fmt.Sprintf("%s on %s: %s [%s / %s]", state, dev, formatItem(it), mmss(st.Progress()), mmss(it.Duration()))), nil, nil
 }
 
 func (t tools) search(ctx context.Context, _ *mcp.CallToolRequest, in searchArgs) (*mcp.CallToolResult, any, error) {
@@ -208,22 +210,25 @@ func (t tools) transfer(ctx context.Context, _ *mcp.CallToolRequest, in transfer
 	if err != nil {
 		return nil, nil, err
 	}
-	return text("Moved playback to " + dev.Name + "."), nil, nil
+	if dev == nil {
+		return text("Moved playback."), nil, nil
+	}
+	return text("Moved playback to " + dev.Name() + "."), nil, nil
 }
 
 // done turns the result of a simple command into a tool result.
-func done(dev *playback.Device, err error, msg string) (*mcp.CallToolResult, any, error) {
+func done(dev playback.Device, err error, msg string) (*mcp.CallToolResult, any, error) {
 	if err != nil {
 		return nil, nil, err
 	}
 	return text(msg + on(dev) + "."), nil, nil
 }
 
-func on(dev *playback.Device) string {
+func on(dev playback.Device) string {
 	if dev == nil {
 		return ""
 	}
-	return " on " + dev.Name
+	return " on " + dev.Name()
 }
 
 func text(s string) *mcp.CallToolResult {
@@ -231,28 +236,32 @@ func text(s string) *mcp.CallToolResult {
 }
 
 func formatDevice(d playback.Device) string {
-	s := fmt.Sprintf("%s (%s, id %s)", d.Name, d.Type, d.ID)
-	if d.Active {
+	id := "none"
+	if d.ID() != nil {
+		id = d.ID().String()
+	}
+	s := fmt.Sprintf("%s (%s, id %s)", d.Name(), d.Type(), id)
+	if d.Active() {
 		s += " [active]"
 	}
-	if d.Restricted {
+	if d.Restricted() || d.ID() == nil {
 		s += " [can't be controlled]"
 	}
 	return s
 }
 
 func formatItem(it playback.Item) string {
-	s := it.Name
-	if len(it.Artists) > 0 {
-		s += " by " + strings.Join(it.Artists, ", ")
+	s := it.Name()
+	if artists := it.Artists(); len(artists) > 0 {
+		s += " by " + strings.Join(artists, ", ")
 	}
-	if it.Album != "" && it.Kind != playback.KindAlbum {
-		s += " (" + it.Album + ")"
+	if it.Album() != "" && it.Kind() != playback.KindAlbum() {
+		s += " (" + it.Album() + ")"
 	}
-	if it.Owner != "" {
-		s += " (by " + it.Owner + ")"
+	if it.Owner() != "" {
+		s += " (by " + it.Owner() + ")"
 	}
-	return s + " - " + it.URI.String()
+	return s + " - " + it.URI().String()
 }
 
 func mmss(d time.Duration) string {

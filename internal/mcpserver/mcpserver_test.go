@@ -19,9 +19,17 @@ type fakePlayer struct {
 	err   error
 }
 
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
 var (
-	pixel = playback.Device{ID: "ph1", Name: "Jan's Pixel 8", Type: "Smartphone", Active: true}
-	song  = playback.Item{Kind: playback.KindTrack, Name: "Song", Artists: []string{"Band"}, Album: "LP", Duration: 3 * time.Minute}
+	pixel = playback.NewDevice(must(playback.ParseDeviceID("ph1")), "Jan's Pixel 8", "Smartphone", true, false)
+	song  = must(playback.NewItem(must(playback.ParseURI("spotify:track:s1")), "Song",
+		playback.WithArtists("Band"), playback.WithAlbum("LP"), playback.WithDuration(3*time.Minute)))
 )
 
 func (f *fakePlayer) record(s string) { f.calls = append(f.calls, s) }
@@ -29,34 +37,34 @@ func (f *fakePlayer) record(s string) { f.calls = append(f.calls, s) }
 func (f *fakePlayer) Devices(context.Context) ([]playback.Device, error) {
 	return []playback.Device{pixel}, nil
 }
-func (f *fakePlayer) NowPlaying(context.Context) (*playback.State, error) {
-	return &playback.State{Playing: true, Device: &pixel, Item: &song, Progress: 61 * time.Second}, nil
+func (f *fakePlayer) NowPlaying(context.Context) (playback.State, error) {
+	return playback.NewState(true, 61*time.Second, pixel, song), nil
 }
 func (f *fakePlayer) Search(_ context.Context, q string, k playback.Kind, limit int) ([]playback.Item, error) {
-	f.record("search " + q + " " + string(k))
+	f.record("search " + q + " " + k.String())
 	return []playback.Item{song}, nil
 }
-func (f *fakePlayer) Play(_ context.Context, sel string, u playback.URI) (*playback.Device, error) {
+func (f *fakePlayer) Play(_ context.Context, sel string, u playback.URI) (playback.Device, error) {
 	f.record("play " + sel + " " + u.String())
-	return &pixel, f.err
+	return pixel, f.err
 }
-func (f *fakePlayer) PlayFirst(_ context.Context, sel, q string, k playback.Kind) (playback.Item, *playback.Device, error) {
-	f.record("playfirst " + sel + " " + q + " " + string(k))
+func (f *fakePlayer) PlayFirst(_ context.Context, sel, q string, k playback.Kind) (playback.Item, playback.Device, error) {
+	f.record("playfirst " + sel + " " + q + " " + k.String())
 	return song, nil, f.err
 }
-func (f *fakePlayer) Resume(_ context.Context, sel string) (*playback.Device, error) {
+func (f *fakePlayer) Resume(_ context.Context, sel string) (playback.Device, error) {
 	f.record("resume " + sel)
 	return nil, f.err
 }
-func (f *fakePlayer) Pause(_ context.Context, sel string) (*playback.Device, error) {
+func (f *fakePlayer) Pause(_ context.Context, sel string) (playback.Device, error) {
 	f.record("pause " + sel)
 	return nil, f.err
 }
-func (f *fakePlayer) Next(_ context.Context, sel string) (*playback.Device, error) {
+func (f *fakePlayer) Next(_ context.Context, sel string) (playback.Device, error) {
 	f.record("next " + sel)
 	return nil, f.err
 }
-func (f *fakePlayer) Previous(_ context.Context, sel string) (*playback.Device, error) {
+func (f *fakePlayer) Previous(_ context.Context, sel string) (playback.Device, error) {
 	f.record("previous " + sel)
 	return nil, f.err
 }

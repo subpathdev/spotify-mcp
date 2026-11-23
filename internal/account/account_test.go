@@ -25,6 +25,25 @@ func mustProfileID(s string) account.ProfileID {
 	return id
 }
 
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+func token(access, refresh string, expiry time.Time) account.Token {
+	return must(account.NewToken(access, refresh, expiry))
+}
+
+func spotifyAccount(id, name string) account.SpotifyAccount {
+	return must(account.NewSpotifyAccount(id, name))
+}
+
+func connection(tok account.Token, acc account.SpotifyAccount, at time.Time) account.Connection {
+	return must(account.NewConnection(tok, acc, at))
+}
+
 // fakeOAuth issues tokens for the code "good" and the verifier of the last
 // started login.
 type fakeOAuth struct {
@@ -48,10 +67,10 @@ func (f *fakeOAuth) Exchange(_ context.Context, code, verifier string) (account.
 	defer f.mu.Unlock()
 	for _, v := range f.verifiers {
 		if v == verifier && code == "good" {
-			return account.Token{AccessToken: "a1", RefreshToken: "r1", Expiry: time.Now().Add(time.Hour)}, nil
+			return token("a1", "r1", time.Now().Add(time.Hour)), nil
 		}
 	}
-	return account.Token{}, errors.New("bad code or verifier")
+	return nil, errors.New("bad code or verifier")
 }
 
 func (f *fakeOAuth) Refresh(ctx context.Context, rt string) (account.Token, error) {
@@ -61,14 +80,17 @@ func (f *fakeOAuth) Refresh(ctx context.Context, rt string) (account.Token, erro
 type fakeIdentity struct{ err error }
 
 func (f fakeIdentity) Account(context.Context, string) (account.SpotifyAccount, error) {
-	return account.SpotifyAccount{ID: "jan", DisplayName: "Jan"}, f.err
+	if f.err != nil {
+		return nil, f.err
+	}
+	return spotifyAccount("jan", "Jan"), nil
 }
 
 type env struct {
-	store   *filestore.Store
+	store   filestore.Store
 	oauth   *fakeOAuth
-	inviter *account.Inviter
-	svc     *account.Service
+	inviter account.Inviter
+	svc     account.Service
 	now     time.Time
 }
 
@@ -101,11 +123,11 @@ func (e *env) start(t *testing.T, code account.InviteCode) account.Callback {
 	if err != nil {
 		t.Fatal(err)
 	}
-	u, err := url.Parse(login.URL)
+	u, err := url.Parse(login.URL())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return account.Callback{State: u.Query().Get("state"), Nonce: login.Nonce, Code: "good"}
+	return account.NewCallback(u.Query().Get("state"), login.Nonce(), "good", "")
 }
 
 func TestLoginConnectsAndUsesUpInvite(t *testing.T) {
@@ -114,10 +136,10 @@ func TestLoginConnectsAndUsesUpInvite(t *testing.T) {
 	code := e.invite(t)
 
 	st, err := e.svc.Status(ctx, code)
-	if err != nil || st.Profile.ID() != profile || !st.ConnectedAt.IsZero() {
+	if err != nil || st.Profile().ID() != profile || !st.ConnectedAt().IsZero() {
 		t.Fatalf("status before: %+v %v", st, err)
 	}
-	if _, connected := st.Profile.Account(); connected {
+	if _, connected := st.Profile().Account(); connected {
 		t.Fatal("connected before login")
 	}
 	p, err := e.svc.FinishLogin(ctx, e.start(t, code))
@@ -128,7 +150,7 @@ func TestLoginConnectsAndUsesUpInvite(t *testing.T) {
 		t.Fatalf("finish account: %+v %v", acc, ok)
 	}
 	c, err := e.store.Connection(ctx, profile)
-	if err != nil || c.Token.RefreshToken != "r1" || c.Account.ID != "jan" || !c.ConnectedAt.Equal(e.now) {
+	if err != nil || c.Token().RefreshToken() != "r1" || c.Account().ID() != "jan" || !c.ConnectedAt().Equal(e.now) {
 		t.Fatalf("stored: %+v %v", c, err)
 	}
 	if _, err := e.svc.Status(ctx, code); !errors.Is(err, account.ErrInvalidInvite) {
@@ -142,8 +164,7 @@ func TestFinishLoginNeedsSameBrowserOnce(t *testing.T) {
 	code := e.invite(t)
 
 	cb := e.start(t, code)
-	foreign := cb
-	foreign.Nonce = "someone-else"
+	foreign := account.NewCallback(cb.State(), "someone-else", cb.Code(), "")
 	if _, err := e.svc.FinishLogin(ctx, foreign); !errors.Is(err, account.ErrLoginExpired) {
 		t.Fatalf("foreign browser: %v", err)
 	}
@@ -172,8 +193,8 @@ func TestFailedLoginsKeepInvite(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			e := newEnv(t, tc.identityErr)
 			code := e.invite(t)
-			cb := e.start(t, code)
-			cb.Error = tc.spotifyErr
+			started := e.start(t, code)
+			cb := account.NewCallback(started.State(), started.Nonce(), started.Code(), tc.spotifyErr)
 			if _, err := e.svc.FinishLogin(ctx, cb); !errors.Is(err, tc.want) {
 				t.Fatalf("got %v, want %v", err, tc.want)
 			}
@@ -192,10 +213,10 @@ func TestDisconnect(t *testing.T) {
 	}
 	code := e.invite(t)
 	st, err := e.svc.Status(ctx, code)
-	if err != nil || !st.ConnectedAt.Equal(e.now) {
+	if err != nil || !st.ConnectedAt().Equal(e.now) {
 		t.Fatalf("status: %+v %v", st, err)
 	}
-	if acc, ok := st.Profile.Account(); !ok || acc.Name() != "Jan" {
+	if acc, ok := st.Profile().Account(); !ok || acc.Name() != "Jan" {
 		t.Fatalf("status account: %+v %v", acc, ok)
 	}
 	p, err := e.svc.Disconnect(ctx, code)
@@ -312,7 +333,37 @@ func TestProfiles(t *testing.T) {
 		t.Fatal("snapshot changed")
 	}
 	p, err = profiles.Profile(ctx, profile)
-	if acc, ok := p.Account(); err != nil || !ok || acc.ID != "jan" {
+	if acc, ok := p.Account(); err != nil || !ok || acc.ID() != "jan" {
 		t.Fatalf("after login: %+v %v %v", acc, ok, err)
+	}
+}
+
+func TestEntityConstructors(t *testing.T) {
+	if _, err := account.NewToken("", "", time.Time{}); err == nil {
+		t.Error("empty token accepted")
+	}
+	if _, err := account.NewSpotifyAccount("", "Jan"); err == nil {
+		t.Error("account without ID accepted")
+	}
+	tok, acc := token("secret-access", "secret-refresh", time.Time{}), spotifyAccount("jan", "")
+	if acc.Name() != "jan" {
+		t.Errorf("name falls back to the ID: %q", acc.Name())
+	}
+	for name, c := range map[string]struct {
+		tok account.Token
+		acc account.SpotifyAccount
+	}{
+		"no token":         {nil, acc},
+		"no refresh token": {token("a", "", time.Time{}), acc},
+		"no account":       {tok, nil},
+	} {
+		if _, err := account.NewConnection(c.tok, c.acc, time.Time{}); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	for _, s := range []string{fmt.Sprint(tok), fmt.Sprintf("%v", tok), fmt.Sprintf("%+v", tok)} {
+		if strings.Contains(s, "secret") {
+			t.Errorf("token printed: %s", s)
+		}
 	}
 }

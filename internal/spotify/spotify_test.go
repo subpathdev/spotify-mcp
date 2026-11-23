@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -46,7 +47,7 @@ type fakeAPI struct {
 	routes map[string]http.HandlerFunc
 }
 
-func newPlayer(t *testing.T, routes map[string]http.HandlerFunc) (*Player, *fakeAPI, *fakeTokens) {
+func newPlayer(t *testing.T, routes map[string]http.HandlerFunc) (playback.Spotify, *fakeAPI, *fakeTokens) {
 	t.Helper()
 	f := &fakeAPI{routes: routes}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -84,6 +85,15 @@ func spotifyError(status int, reason string) http.HandlerFunc {
 	}
 }
 
+func mustDevice(t *testing.T, s string) playback.DeviceID {
+	t.Helper()
+	id, err := playback.ParseDeviceID(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 func mustURI(t *testing.T, s string) playback.URI {
 	t.Helper()
 	u, err := playback.ParseURI(s)
@@ -102,7 +112,7 @@ func TestPlayBodies(t *testing.T) {
 		"spotify:album:3":    `{"context_uri":"spotify:album:3"}`,
 		"spotify:playlist:4": `{"context_uri":"spotify:playlist:4"}`,
 	} {
-		if err := p.Play(ctx, "dev1", mustURI(t, uri)); err != nil {
+		if err := p.Play(ctx, mustDevice(t, "dev1"), mustURI(t, uri)); err != nil {
 			t.Fatal(err)
 		}
 		c := api.last()
@@ -110,13 +120,13 @@ func TestPlayBodies(t *testing.T) {
 			t.Errorf("%s: %+v", uri, c)
 		}
 	}
-	if err := p.Resume(ctx, ""); err != nil {
+	if err := p.Resume(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
 	if c := api.last(); c.body != "" || c.query != "" {
 		t.Errorf("resume: %+v", c)
 	}
-	if err := p.Transfer(ctx, "ph1", true); err != nil {
+	if err := p.Transfer(ctx, mustDevice(t, "ph1"), true); err != nil {
 		t.Fatal(err)
 	}
 	if c := api.last(); c.path != "/me/player" || c.body != `{"device_ids":["ph1"],"play":true}` {
@@ -134,14 +144,14 @@ func TestErrors(t *testing.T) {
 			w.WriteHeader(http.StatusTooManyRequests)
 		},
 	})
-	if err := p.Pause(ctx, ""); !errors.Is(err, playback.ErrNoActiveDevice) {
+	if err := p.Pause(ctx, nil); !errors.Is(err, playback.ErrNoActiveDevice) {
 		t.Errorf("pause: %v", err)
 	}
-	if err := p.Next(ctx, ""); !errors.Is(err, playback.ErrPremiumRequired) {
+	if err := p.Next(ctx, nil); !errors.Is(err, playback.ErrPremiumRequired) {
 		t.Errorf("next: %v", err)
 	}
 	var apiErr *Error
-	if err := p.Previous(ctx, ""); !errors.As(err, &apiErr) || apiErr.Status != 429 || !strings.Contains(err.Error(), "7 s") {
+	if err := p.Previous(ctx, nil); !errors.As(err, &apiErr) || apiErr.Status != 429 || !strings.Contains(err.Error(), "7 s") {
 		t.Errorf("previous: %v", err)
 	}
 }
@@ -157,7 +167,7 @@ func TestUnauthorizedRetriesOnceWithFreshToken(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		},
 	})
-	if err := p.Pause(ctx, ""); err != nil {
+	if err := p.Pause(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(tokens.invalidated) != 1 || tokens.invalidated[0] != "t1" || api.count() != 2 {
@@ -174,7 +184,7 @@ func TestSearchMapsItems(t *testing.T) {
 				{"type":"track","name":"Local","uri":"spotify:local:x:y:z"}]}}`)
 		},
 	})
-	items, err := p.Search(context.Background(), "song", playback.KindTrack, 50)
+	items, err := p.Search(context.Background(), "song", playback.KindTrack(), 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,8 +195,8 @@ func TestSearchMapsItems(t *testing.T) {
 		t.Fatalf("items %+v", items)
 	}
 	it := items[0]
-	if it.Name != "Song" || it.URI.String() != "spotify:track:1" || strings.Join(it.Artists, ",") != "A,B" || it.Album != "LP" || it.Duration.Seconds() != 61 {
-		t.Fatalf("item %+v", it)
+	if it.Name() != "Song" || it.URI().String() != "spotify:track:1" || strings.Join(it.Artists(), ",") != "A,B" || it.Album() != "LP" || it.Duration().Seconds() != 61 {
+		t.Fatalf("item %v %v", it.Name(), it.URI())
 	}
 }
 
@@ -225,7 +235,7 @@ func TestOAuthErrors(t *testing.T) {
 	})
 
 	tok, err := o.Refresh(ctx, "r1")
-	if err != nil || tok.AccessToken != "a2" || tok.RefreshToken != "" {
+	if err != nil || tok.AccessToken() != "a2" || tok.RefreshToken() != "" {
 		t.Fatalf("unchanged refresh token must be reported as empty: %+v %v", tok, err)
 	}
 	answer = "invalid_grant"
@@ -235,5 +245,13 @@ func TestOAuthErrors(t *testing.T) {
 	answer = "invalid_client"
 	if _, err := o.Exchange(ctx, "code", "verifier"); !errors.Is(err, account.ErrInvalidClient) {
 		t.Fatalf("invalid_client: %v", err)
+	}
+}
+
+func TestScopesCannotBeWidened(t *testing.T) {
+	s := Scopes()
+	s[0] = "user-library-read"
+	if slices.Contains(Scopes(), "user-library-read") {
+		t.Fatal("Scopes shared its slice")
 	}
 }

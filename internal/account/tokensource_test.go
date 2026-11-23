@@ -16,15 +16,12 @@ func (e *env) connect(t *testing.T, c account.Connection) {
 	}
 }
 
-func (e *env) tokens() *account.TokenSource {
+func (e *env) tokens() account.TokenSource {
 	return account.NewTokenSource(e.store, e.oauth, profile, account.WithClock(func() time.Time { return e.now }))
 }
 
 func expired(rt string) account.Connection {
-	return account.Connection{
-		Token:   account.Token{AccessToken: "old", RefreshToken: rt},
-		Account: account.SpotifyAccount{ID: "jan", DisplayName: "Jan"},
-	}
+	return connection(token("old", rt, time.Time{}), spotifyAccount("jan", "Jan"), time.Time{})
 }
 
 func TestAccessTokenRefreshesAndPersists(t *testing.T) {
@@ -42,7 +39,7 @@ func TestAccessTokenRefreshesAndPersists(t *testing.T) {
 				if rt != "r1" {
 					t.Errorf("refreshed with %q", rt)
 				}
-				return account.Token{AccessToken: "new", RefreshToken: tc.sent, Expiry: e.now.Add(time.Hour)}, nil
+				return token("new", tc.sent, e.now.Add(time.Hour)), nil
 			}
 			ts := e.tokens()
 			for range 2 {
@@ -54,7 +51,7 @@ func TestAccessTokenRefreshesAndPersists(t *testing.T) {
 				t.Fatalf("refreshed %d times, want once", calls)
 			}
 			c, _ := e.store.Connection(ctx, profile)
-			if c.Token.RefreshToken != tc.stored || c.Account.DisplayName != "Jan" {
+			if c.Token().RefreshToken() != tc.stored || c.Account().DisplayName() != "Jan" {
 				t.Fatalf("stored %+v", c)
 			}
 		})
@@ -68,7 +65,7 @@ func TestAccessTokenNotConnected(t *testing.T) {
 		t.Fatalf("no connection: %v", err)
 	}
 	e.connect(t, expired("r1"))
-	e.oauth.refresh = func(context.Context, string) (account.Token, error) { return account.Token{}, account.ErrRevoked }
+	e.oauth.refresh = func(context.Context, string) (account.Token, error) { return nil, account.ErrRevoked }
 	if _, err := e.tokens().AccessToken(ctx); !errors.Is(err, account.ErrNotConnected) {
 		t.Fatalf("revoked: %v", err)
 	}
@@ -77,11 +74,9 @@ func TestAccessTokenNotConnected(t *testing.T) {
 func TestInvalidateForcesRefresh(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, nil)
-	c := expired("r1")
-	c.Token.Expiry = e.now.Add(time.Hour)
-	e.connect(t, c)
+	e.connect(t, connection(token("old", "r1", e.now.Add(time.Hour)), spotifyAccount("jan", "Jan"), time.Time{}))
 	e.oauth.refresh = func(context.Context, string) (account.Token, error) {
-		return account.Token{AccessToken: "new", Expiry: e.now.Add(time.Hour)}, nil
+		return token("new", "", e.now.Add(time.Hour)), nil
 	}
 	ts := e.tokens()
 	if err := ts.Invalidate(ctx, "not-the-stored-one"); err != nil {
@@ -109,7 +104,7 @@ func TestLoginDuringRefreshWins(t *testing.T) {
 	e.oauth.refresh = func(context.Context, string) (account.Token, error) {
 		close(refreshing)
 		<-release
-		return account.Token{AccessToken: "old-account-access", Expiry: e.now.Add(time.Hour)}, nil
+		return token("old-account-access", "", e.now.Add(time.Hour)), nil
 	}
 	refreshed := make(chan error, 1)
 	go func() {
@@ -118,10 +113,7 @@ func TestLoginDuringRefreshWins(t *testing.T) {
 	}()
 	<-refreshing
 
-	login := account.Connection{
-		Token:   account.Token{AccessToken: "new-access", RefreshToken: "new-account", Expiry: e.now.Add(time.Hour)},
-		Account: account.SpotifyAccount{ID: "someone-else"},
-	}
+	login := connection(token("new-access", "new-account", e.now.Add(time.Hour)), spotifyAccount("someone-else", ""), time.Time{})
 	saved := make(chan error, 1)
 	go func() { saved <- e.store.SaveConnection(ctx, profile, login) }()
 	select {
@@ -137,7 +129,7 @@ func TestLoginDuringRefreshWins(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err := e.store.Connection(ctx, profile)
-	if err != nil || c.Token.RefreshToken != "new-account" || c.Account.ID != "someone-else" {
+	if err != nil || c.Token().RefreshToken() != "new-account" || c.Account().ID() != "someone-else" {
 		t.Fatalf("stored %+v %v, want the new login", c, err)
 	}
 }

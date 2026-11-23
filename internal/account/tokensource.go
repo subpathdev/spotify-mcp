@@ -14,20 +14,31 @@ import (
 // writes the connection as one step. A login that lands meanwhile waits and
 // then replaces the result, instead of being overwritten by the old account's
 // refreshed token. It also means two callers never refresh the same token.
-type TokenSource struct {
+type TokenSource interface {
+	// AccessToken returns a valid access token, or ErrNotConnected.
+	AccessToken(ctx context.Context) (string, error)
+	// Invalidate marks accessToken as expired after Spotify rejected it, so
+	// the next call refreshes. It does nothing if the stored token has
+	// changed since.
+	Invalidate(ctx context.Context, accessToken string) error
+}
+
+type tokenSource struct {
 	tokens  Tokens
 	oauth   OAuth
 	profile ProfileID
 	now     func() time.Time
 }
 
-// NewTokenSource returns a TokenSource for p.
-func NewTokenSource(tokens Tokens, oauth OAuth, id ProfileID, opts ...Option) *TokenSource {
-	return &TokenSource{tokens: tokens, oauth: oauth, profile: id, now: apply(opts).now}
+// NewTokenSource returns a TokenSource for the profile.
+func NewTokenSource(tokens Tokens, oauth OAuth, id ProfileID, opts ...Option) TokenSource {
+	return &tokenSource{tokens: tokens, oauth: oauth, profile: id, now: apply(opts).now}
 }
 
-// AccessToken returns a valid access token, or ErrNotConnected.
-func (ts *TokenSource) AccessToken(ctx context.Context) (string, error) {
+func (ts *tokenSource) AccessToken(ctx context.Context) (string, error) {
+	if ts.profile == nil {
+		return "", ErrNotConnected
+	}
 	c, err := ts.tokens.Connection(ctx, ts.profile)
 	if errors.Is(err, ErrNotFound) {
 		return "", ErrNotConnected
@@ -35,25 +46,28 @@ func (ts *TokenSource) AccessToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("load connection: %w", err)
 	}
-	if c.accessValid(ts.now()) {
-		return c.Token.AccessToken, nil
+	if accessValid(c, ts.now()) {
+		return c.Token().AccessToken(), nil
 	}
 
 	var access string
-	err = ts.tokens.UpdateConnection(ctx, ts.profile, func(c *Connection) error {
-		if c.accessValid(ts.now()) { // refreshed by someone else meanwhile
-			access = c.Token.AccessToken
-			return nil
+	err = ts.tokens.UpdateConnection(ctx, ts.profile, func(c Connection) (Connection, error) {
+		if accessValid(c, ts.now()) { // refreshed by someone else meanwhile
+			access = c.Token().AccessToken()
+			return c, nil
 		}
-		tok, err := ts.oauth.Refresh(ctx, c.Token.RefreshToken)
+		old := c.Token().RefreshToken()
+		tok, err := ts.oauth.Refresh(ctx, old)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if tok.RefreshToken == "" { // Spotify kept the old one
-			tok.RefreshToken = c.Token.RefreshToken
+		if tok.RefreshToken() == "" { // Spotify kept the old one
+			if tok, err = NewToken(tok.AccessToken(), old, tok.Expiry()); err != nil {
+				return nil, err
+			}
 		}
-		c.Token, access = tok, tok.AccessToken
-		return nil
+		access = tok.AccessToken()
+		return withToken(c, tok), nil
 	})
 	switch {
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrRevoked):
@@ -64,14 +78,17 @@ func (ts *TokenSource) AccessToken(ctx context.Context) (string, error) {
 	return access, nil
 }
 
-// Invalidate marks accessToken as expired after Spotify rejected it, so the
-// next call refreshes. It does nothing if the stored token has changed since.
-func (ts *TokenSource) Invalidate(ctx context.Context, accessToken string) error {
-	err := ts.tokens.UpdateConnection(ctx, ts.profile, func(c *Connection) error {
-		if c.Token.AccessToken == accessToken {
-			c.Token.Expiry = time.Time{}
+func (ts *tokenSource) Invalidate(ctx context.Context, accessToken string) error {
+	err := ts.tokens.UpdateConnection(ctx, ts.profile, func(c Connection) (Connection, error) {
+		t := c.Token()
+		if t.AccessToken() != accessToken {
+			return c, nil
 		}
-		return nil
+		expired, err := NewToken(t.AccessToken(), t.RefreshToken(), time.Time{})
+		if err != nil {
+			return nil, err
+		}
+		return withToken(c, expired), nil
 	})
 	if errors.Is(err, ErrNotFound) {
 		return nil

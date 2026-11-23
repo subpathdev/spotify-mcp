@@ -62,16 +62,16 @@ func invite(args []string) error {
 	if err != nil {
 		return err
 	}
-	store, err := filestore.Open(cfg.DataDir)
+	store, err := filestore.Open(cfg.DataDir())
 	if err != nil {
 		return err
 	}
-	code, expires, err := account.NewInviter(store).CreateInvite(context.Background(), cfg.ProfileID, *ttl)
+	code, expires, err := account.NewInviter(store).CreateInvite(context.Background(), cfg.ProfileID(), *ttl)
 	if err != nil {
 		return err
 	}
 	fmt.Println(cfg.InviteURL(code))
-	fmt.Fprintf(os.Stderr, "One-time link for profile %q, valid until %s.\n", cfg.ProfileID, expires.Format("2006-01-02 15:04 MST"))
+	fmt.Fprintf(os.Stderr, "One-time link for profile %q, valid until %s.\n", cfg.ProfileID(), expires.Format("2006-01-02 15:04 MST"))
 	return nil
 }
 
@@ -83,45 +83,45 @@ func serve(log *slog.Logger) error {
 	if err := cfg.RequireCredentials(); err != nil {
 		return err
 	}
-	store, err := filestore.Open(cfg.DataDir)
+	store, err := filestore.Open(cfg.DataDir())
 	if err != nil {
 		return err
 	}
 
 	oauth := spotify.NewOAuth(spotify.OAuthConfig{
-		ClientID: cfg.ClientID, ClientSecret: cfg.ClientSecret, RedirectURL: cfg.RedirectURL.String(),
+		ClientID: cfg.ClientID(), ClientSecret: cfg.ClientSecret(), RedirectURL: cfg.RedirectURL(),
 	})
 	api := spotify.NewAPI(spotify.DefaultAPIURL, nil)
-	tokens := account.NewTokenSource(store, oauth, cfg.ProfileID)
+	tokens := account.NewTokenSource(store, oauth, cfg.ProfileID())
 	player := playback.NewService(spotify.NewPlayer(api, tokens))
 	accounts := account.NewService(store, store, oauth, api)
 
 	// Only for the log: a broken token file shouldn't stop the server, the
 	// tools report it when they need the token.
-	prof, err := account.NewProfiles(store).Profile(context.Background(), cfg.ProfileID)
+	prof, err := account.NewProfiles(store).Profile(context.Background(), cfg.ProfileID())
 	if err != nil {
-		log.Warn("can't read the connected account", "profile", cfg.ProfileID.String(), "err", err)
+		log.Warn("can't read the connected account", "profile", cfg.ProfileID().String(), "err", err)
 	} else if acc, ok := prof.Account(); ok {
-		log.Info("spotify account connected", "profile", prof.ID().String(), "spotify_user", acc.ID)
+		log.Info("spotify account connected", "profile", prof.ID().String(), "spotify_user", acc.ID())
 	} else {
 		log.Warn("no Spotify account connected yet; run 'spotify-mcp invite' and open the link", "profile", prof.ID().String())
 	}
 
 	servers := []*http.Server{
 		{
-			Addr:              cfg.MCPAddr,
+			Addr:              cfg.MCPAddr(),
 			Handler:           mcpserver.Handler(mcpserver.NewServer(player, version), log),
 			ReadHeaderTimeout: 10 * time.Second,
 		},
 		{
-			Addr:              cfg.WebAddr,
+			Addr:              cfg.WebAddr(),
 			Handler:           web.NewHandler(accounts, log),
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       30 * time.Second,
 			WriteTimeout:      30 * time.Second,
 		},
 	}
-	log.Info("spotify-mcp started", "version", version, "profile", cfg.ProfileID.String(), "connect_url", cfg.PublicURL.JoinPath("connect").String())
+	log.Info("spotify-mcp started", "version", version, "profile", cfg.ProfileID().String(), "connect_url", cfg.ConnectURL())
 	return run(log, servers)
 }
 

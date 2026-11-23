@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/subpathdev/spotify-mcp/internal/account"
 	"github.com/subpathdev/spotify-mcp/internal/playback"
 )
 
@@ -24,19 +25,26 @@ const DefaultAPIURL = "https://api.spotify.com/v1"
 
 const maxBody = 4 << 20
 
-// API sends requests to the Web API with a given access token.
-type API struct {
+// API sends requests to the Web API with a given access token. It tells
+// whose a token is (account.Identity); NewPlayer uses it for playback. Only
+// this package implements it.
+type API interface {
+	account.Identity
+	do(ctx context.Context, token string, req request) (int, error)
+}
+
+type api struct {
 	base string
 	http *http.Client
 }
 
 // NewAPI returns an API for baseURL (DefaultAPIURL in production). httpClient
 // may be nil.
-func NewAPI(baseURL string, httpClient *http.Client) *API {
+func NewAPI(baseURL string, httpClient *http.Client) API {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 15 * time.Second}
 	}
-	return &API{base: strings.TrimRight(baseURL, "/"), http: httpClient}
+	return &api{base: strings.TrimRight(baseURL, "/"), http: httpClient}
 }
 
 // Error is an error answer from the Web API that has no domain meaning.
@@ -71,7 +79,7 @@ type request struct {
 }
 
 // do sends req and returns the HTTP status. A 204 leaves req.out untouched.
-func (a *API) do(ctx context.Context, token string, req request) (int, error) {
+func (a *api) do(ctx context.Context, token string, req request) (int, error) {
 	u := a.base + req.path
 	if len(req.query) > 0 {
 		u += "?" + req.query.Encode()
