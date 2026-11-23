@@ -12,7 +12,16 @@ import (
 	"github.com/subpathdev/spotify-mcp/internal/filestore"
 )
 
-const profile = account.Profile("default")
+var profile = mustProfile("default")
+
+// mustProfile parses a profile ID that the test knows to be valid.
+func mustProfile(id string) account.Profile {
+	p, err := account.ParseProfile(id)
+	if err != nil {
+		panic(err)
+	}
+	return p
+}
 
 // fakeOAuth issues tokens for the code "good" and the verifier of the last
 // started login.
@@ -103,7 +112,7 @@ func TestLoginConnectsAndUsesUpInvite(t *testing.T) {
 	code := e.invite(t)
 
 	st, err := e.svc.Status(ctx, code)
-	if err != nil || st.Connected || st.Profile != profile {
+	if err != nil || st.Connected || st.Profile.ID() != profile.ID() {
 		t.Fatalf("status before: %+v %v", st, err)
 	}
 	user, err := e.svc.FinishLogin(ctx, e.start(t, code))
@@ -177,7 +186,7 @@ func TestDisconnect(t *testing.T) {
 	if st, _ := e.svc.Status(ctx, code); !st.Connected || st.User.Name() != "Jan" {
 		t.Fatalf("status: %+v", st)
 	}
-	if p, err := e.svc.Disconnect(ctx, code); err != nil || p != profile {
+	if p, err := e.svc.Disconnect(ctx, code); err != nil || p.ID() != profile.ID() {
 		t.Fatalf("disconnect: %q %v", p, err)
 	}
 	if _, err := e.store.Connection(ctx, profile); !errors.Is(err, account.ErrNotFound) {
@@ -201,6 +210,9 @@ func TestInvites(t *testing.T) {
 	if _, err := e.svc.StartLogin(ctx, code); !errors.Is(err, account.ErrInvalidInvite) {
 		t.Fatalf("expired invite accepted: %v", err)
 	}
+	if _, _, err := e.inviter.CreateInvite(ctx, nil, time.Hour); err == nil {
+		t.Fatal("nil profile accepted")
+	}
 	if _, _, err := e.inviter.CreateInvite(ctx, profile, 0); err == nil {
 		t.Fatal("zero TTL accepted")
 	}
@@ -212,7 +224,7 @@ func TestParseProfile(t *testing.T) {
 			t.Errorf("%q accepted", s)
 		}
 	}
-	if p, err := account.ParseProfile("jan-2"); err != nil || p != "jan-2" {
-		t.Fatalf("valid profile: %q %v", p, err)
+	if p, err := account.ParseProfile("jan-2"); err != nil || p.ID() != "jan-2" {
+		t.Fatalf("valid profile: %v %v", p, err)
 	}
 }

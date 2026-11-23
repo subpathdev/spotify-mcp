@@ -163,10 +163,10 @@ func (s *Service) FinishLogin(ctx context.Context, cb Callback) (User, error) {
 func (s *Service) Disconnect(ctx context.Context, code InviteCode) (Profile, error) {
 	inv, err := s.takeInvite(ctx, hashInvite(code))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if err := s.tokens.DeleteConnection(ctx, inv.Profile); err != nil {
-		return "", fmt.Errorf("delete connection: %w", err)
+		return nil, fmt.Errorf("delete connection: %w", err)
 	}
 	return inv.Profile, nil
 }

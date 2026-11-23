@@ -72,6 +72,14 @@ type inviteRecord struct {
 	Expires time.Time `json:"expires"`
 }
 
+func (r inviteRecord) invite(h account.InviteHash) (account.Invite, error) {
+	p, err := account.ParseProfile(r.Profile)
+	if err != nil {
+		return account.Invite{}, fmt.Errorf("invite %s: %w", h, err)
+	}
+	return account.Invite{Hash: h, Profile: p, Expires: r.Expires}, nil
+}
+
 // lock takes the in-process and the cross-process lock.
 func (s *Store) lock() (unlock func(), err error) {
 	s.mu.Lock()
@@ -84,12 +92,16 @@ func (s *Store) lock() (unlock func(), err error) {
 }
 
 func (s *Store) connectionPath(p account.Profile) (string, error) {
-	// Profiles are validated when parsed; check again because the value ends
-	// up in a file name.
-	if _, err := account.ParseProfile(string(p)); err != nil {
+	if p == nil {
+		return "", errors.New("no profile given")
+	}
+	// ParseProfile validates IDs, but Profile is an interface that other
+	// code may implement; check again because the ID ends up in a file name.
+	id := p.ID()
+	if _, err := account.ParseProfile(id); err != nil {
 		return "", err
 	}
-	return filepath.Join(s.dir, "tokens", string(p)+".json"), nil
+	return filepath.Join(s.dir, "tokens", id+".json"), nil
 }
 
 // Connection implements account.Tokens.
@@ -193,7 +205,7 @@ func (s *Store) changeInvites(fn func(map[account.InviteHash]inviteRecord) error
 // AddInvite implements account.Invites.
 func (s *Store) AddInvite(_ context.Context, i account.Invite) error {
 	return s.changeInvites(func(inv map[account.InviteHash]inviteRecord) error {
-		inv[i.Hash] = inviteRecord{Profile: string(i.Profile), Expires: i.Expires}
+		inv[i.Hash] = inviteRecord{Profile: i.Profile.ID(), Expires: i.Expires}
 		return nil
 	})
 }
@@ -213,7 +225,7 @@ func (s *Store) Invite(_ context.Context, h account.InviteHash) (account.Invite,
 	if !ok {
 		return account.Invite{}, account.ErrNotFound
 	}
-	return account.Invite{Hash: h, Profile: account.Profile(r.Profile), Expires: r.Expires}, nil
+	return r.invite(h)
 }
 
 // TakeInvite implements account.Invites.
@@ -224,8 +236,12 @@ func (s *Store) TakeInvite(_ context.Context, h account.InviteHash) (account.Inv
 		if !ok {
 			return account.ErrNotFound
 		}
+		i, err := r.invite(h)
+		if err != nil {
+			return err // nothing is written, so the invite stays until it expires
+		}
 		delete(inv, h)
-		out = account.Invite{Hash: h, Profile: account.Profile(r.Profile), Expires: r.Expires}
+		out = i
 		return nil
 	})
 	return out, err

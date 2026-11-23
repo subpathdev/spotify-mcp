@@ -73,9 +73,17 @@ func newEnv(t *testing.T) *env {
 	return &env{srv: srv, inviter: account.NewInviter(st), store: st, identity: id}
 }
 
+var profile = func() account.Profile {
+	p, err := account.ParseProfile("default")
+	if err != nil {
+		panic(err)
+	}
+	return p
+}()
+
 func (e *env) invite(t *testing.T) string {
 	t.Helper()
-	code, _, err := e.inviter.CreateInvite(context.Background(), "default", time.Hour)
+	code, _, err := e.inviter.CreateInvite(context.Background(), profile, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +169,7 @@ func TestConnectFlow(t *testing.T) {
 	if status, _ := get(t, b, e.srv.URL+"/connect?invite="+code); status != http.StatusForbidden {
 		t.Fatalf("used invite: %d", status)
 	}
-	if _, err := e.store.Connection(context.Background(), "default"); err != nil {
+	if _, err := e.store.Connection(context.Background(), profile); err != nil {
 		t.Fatalf("not stored: %v", err)
 	}
 }
@@ -190,7 +198,7 @@ func TestDisconnect(t *testing.T) {
 	if page := body(t, resp); resp.StatusCode != http.StatusOK || !strings.Contains(page, "Disconnected") {
 		t.Fatalf("disconnect: %d %s", resp.StatusCode, page)
 	}
-	if _, err := e.store.Connection(context.Background(), "default"); !errors.Is(err, account.ErrNotFound) {
+	if _, err := e.store.Connection(context.Background(), profile); !errors.Is(err, account.ErrNotFound) {
 		t.Fatalf("connection kept: %v", err)
 	}
 }

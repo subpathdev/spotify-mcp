@@ -14,7 +14,7 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.PublicURL.String() != "https://spotify.example.com" || c.Profile != "default" || c.DataDir != "/data" || c.MCPAddr != ":8000" {
+	if c.PublicURL.String() != "https://spotify.example.com" || c.Profile.ID() != "default" || c.DataDir != "/data" || c.MCPAddr != ":8000" {
 		t.Fatalf("%+v", c)
 	}
 	if err := c.RequireCredentials(); err == nil || !strings.Contains(err.Error(), "SPOTIFY_CLIENT_SECRET") {

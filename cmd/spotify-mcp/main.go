@@ -71,7 +71,7 @@ func invite(args []string) error {
 		return err
 	}
 	fmt.Println(cfg.InviteURL(code))
-	fmt.Fprintf(os.Stderr, "One-time link for profile %q, valid until %s.\n", cfg.Profile, expires.Format("2006-01-02 15:04 MST"))
+	fmt.Fprintf(os.Stderr, "One-time link for profile %q, valid until %s.\n", cfg.Profile.ID(), expires.Format("2006-01-02 15:04 MST"))
 	return nil
 }
 
@@ -97,7 +97,7 @@ func serve(log *slog.Logger) error {
 	accounts := account.NewService(store, store, oauth, api)
 
 	if _, err := store.Connection(context.Background(), cfg.Profile); errors.Is(err, account.ErrNotFound) {
-		log.Warn("no Spotify account connected yet; run 'spotify-mcp invite' and open the link", "profile", cfg.Profile)
+		log.Warn("no Spotify account connected yet; run 'spotify-mcp invite' and open the link", "profile", cfg.Profile.ID())
 	}
 
 	servers := []*http.Server{
@@ -114,7 +114,7 @@ func serve(log *slog.Logger) error {
 			WriteTimeout:      30 * time.Second,
 		},
 	}
-	log.Info("spotify-mcp started", "version", version, "profile", cfg.Profile, "connect_url", cfg.PublicURL.JoinPath("connect").String())
+	log.Info("spotify-mcp started", "version", version, "profile", cfg.Profile.ID(), "connect_url", cfg.PublicURL.JoinPath("connect").String())
 	return run(log, servers)
 }
 

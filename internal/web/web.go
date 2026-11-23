@@ -104,7 +104,7 @@ func (h *handler) connectPost(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, err)
 			return
 		}
-		h.log.Info("spotify account disconnected", "profile", profile)
+		h.log.Info("spotify account disconnected", "profile", profile.ID())
 		h.render(w, http.StatusOK, pageData{
 			Title:   "Disconnected",
 			Message: "The Spotify account is disconnected and its token deleted. To also remove the app on Spotify's side, open spotify.com → Account → Manage apps.",

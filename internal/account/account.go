@@ -14,19 +14,38 @@ import (
 	"time"
 )
 
-// Profile names one connected account. Phase 1 uses a single profile; the
-// type exists so a sign-in system can map people to profiles later.
-type Profile string
+// Profile is one connected account. Phase 1 uses a single profile; it is an
+// interface so more about a profile (a display name, the person a sign-in
+// system maps to it) can be added later without changing the code that only
+// passes profiles around.
+//
+// Profiles are not comparable with ==; compare their IDs.
+type Profile interface {
+	// ID is the validated identifier: 1-63 lower-case letters, digits and
+	// dashes. Adapters use it in file and key names.
+	ID() string
+}
+
+// profile is the Profile built by ParseProfile.
+type profile struct {
+	id string
+}
+
+func (p *profile) ID() string { return p.id }
+
+// String makes a profile print as its ID in logs and messages.
+func (p *profile) String() string { return p.id }
 
 var profileRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
-// ParseProfile checks a profile name. Adapters may use it in file or key
-// names, so it is restricted to lower-case letters, digits and dashes.
-func ParseProfile(s string) (Profile, error) {
-	if !profileRe.MatchString(s) {
-		return "", fmt.Errorf("invalid profile %q: use 1-63 lower-case letters, digits and dashes", s)
+// ParseProfile checks a profile ID and returns its Profile. Adapters may use
+// the ID in file or key names, so it is restricted to lower-case letters,
+// digits and dashes.
+func ParseProfile(id string) (Profile, error) {
+	if !profileRe.MatchString(id) {
+		return nil, fmt.Errorf("invalid profile %q: use 1-63 lower-case letters, digits and dashes", id)
 	}
-	return Profile(s), nil
+	return &profile{id: id}, nil
 }
 
 // User is the Spotify account behind a connection.

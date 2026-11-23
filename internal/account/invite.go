@@ -2,6 +2,7 @@ package account
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -20,6 +21,9 @@ func NewInviter(invites Invites, opts ...Option) *Inviter {
 
 // CreateInvite returns a new one-time code for p and when it expires.
 func (i *Inviter) CreateInvite(ctx context.Context, p Profile, ttl time.Duration) (InviteCode, time.Time, error) {
+	if p == nil {
+		return "", time.Time{}, errors.New("invite needs a profile")
+	}
 	if ttl <= 0 {
 		return "", time.Time{}, fmt.Errorf("invite TTL must be positive, got %s", ttl)
 	}

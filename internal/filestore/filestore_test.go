@@ -13,7 +13,16 @@ import (
 	"github.com/subpathdev/spotify-mcp/internal/account"
 )
 
-const profile = account.Profile("default")
+var profile = mustProfile("default")
+
+// mustProfile parses a profile ID that the test knows to be valid.
+func mustProfile(id string) account.Profile {
+	p, err := account.ParseProfile(id)
+	if err != nil {
+		panic(err)
+	}
+	return p
+}
 
 func open(t *testing.T, dir string) *Store {
 	t.Helper()
@@ -76,10 +85,19 @@ func TestUpdateConnection(t *testing.T) {
 	}
 }
 
+// badProfile is a Profile that skipped ParseProfile, as another
+// implementation of the interface could.
+type badProfile string
+
+func (b badProfile) ID() string { return string(b) }
+
 func TestRejectsBadProfile(t *testing.T) {
 	s := open(t, t.TempDir())
-	if err := s.SaveConnection(context.Background(), "../x", account.Connection{}); err == nil {
+	if err := s.SaveConnection(context.Background(), badProfile("../x"), account.Connection{}); err == nil {
 		t.Fatal("path traversal accepted")
+	}
+	if err := s.SaveConnection(context.Background(), nil, account.Connection{}); err == nil {
+		t.Fatal("nil profile accepted")
 	}
 }
 
@@ -91,7 +109,7 @@ func TestInviteTakenOnce(t *testing.T) {
 	if err := s.AddInvite(ctx, inv); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.Invite(ctx, "h1"); err != nil || got.Profile != profile {
+	if got, err := s.Invite(ctx, "h1"); err != nil || got.Profile.ID() != profile.ID() {
 		t.Fatalf("invite: %+v %v", got, err)
 	}
 
