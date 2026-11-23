@@ -109,21 +109,21 @@ func mapOAuthError(err error) error {
 	return err
 }
 
-// User implements account.Identity. Spotify answers 403 for accounts that
+// Account implements account.Identity. Spotify answers 403 for accounts that
 // aren't on a development-mode app's user list.
-func (a *API) User(ctx context.Context, accessToken string) (account.User, error) {
+func (a *API) Account(ctx context.Context, accessToken string) (account.SpotifyAccount, error) {
 	var out struct {
 		ID          string `json:"id"`
 		DisplayName string `json:"display_name"`
 	}
 	status, err := a.do(ctx, accessToken, request{method: http.MethodGet, path: "/me", out: &out})
 	if status == http.StatusForbidden {
-		return account.User{}, account.ErrNotAllowlisted
+		return account.SpotifyAccount{}, account.ErrNotAllowlisted
 	}
 	if err != nil {
-		return account.User{}, err
+		return account.SpotifyAccount{}, err
 	}
-	return account.User{ID: out.ID, DisplayName: out.DisplayName}, nil
+	return account.SpotifyAccount{ID: out.ID, DisplayName: out.DisplayName}, nil
 }
 
 var _ account.Identity = (*API)(nil)

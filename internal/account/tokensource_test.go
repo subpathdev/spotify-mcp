@@ -22,8 +22,8 @@ func (e *env) tokens() *account.TokenSource {
 
 func expired(rt string) account.Connection {
 	return account.Connection{
-		Token: account.Token{AccessToken: "old", RefreshToken: rt},
-		User:  account.User{ID: "jan", DisplayName: "Jan"},
+		Token:   account.Token{AccessToken: "old", RefreshToken: rt},
+		Account: account.SpotifyAccount{ID: "jan", DisplayName: "Jan"},
 	}
 }
 
@@ -54,7 +54,7 @@ func TestAccessTokenRefreshesAndPersists(t *testing.T) {
 				t.Fatalf("refreshed %d times, want once", calls)
 			}
 			c, _ := e.store.Connection(ctx, profile)
-			if c.Token.RefreshToken != tc.stored || c.User.DisplayName != "Jan" {
+			if c.Token.RefreshToken != tc.stored || c.Account.DisplayName != "Jan" {
 				t.Fatalf("stored %+v", c)
 			}
 		})
@@ -119,8 +119,8 @@ func TestLoginDuringRefreshWins(t *testing.T) {
 	<-refreshing
 
 	login := account.Connection{
-		Token: account.Token{AccessToken: "new-access", RefreshToken: "new-account", Expiry: e.now.Add(time.Hour)},
-		User:  account.User{ID: "someone-else"},
+		Token:   account.Token{AccessToken: "new-access", RefreshToken: "new-account", Expiry: e.now.Add(time.Hour)},
+		Account: account.SpotifyAccount{ID: "someone-else"},
 	}
 	saved := make(chan error, 1)
 	go func() { saved <- e.store.SaveConnection(ctx, profile, login) }()
@@ -137,7 +137,7 @@ func TestLoginDuringRefreshWins(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err := e.store.Connection(ctx, profile)
-	if err != nil || c.Token.RefreshToken != "new-account" || c.User.ID != "someone-else" {
+	if err != nil || c.Token.RefreshToken != "new-account" || c.Account.ID != "someone-else" {
 		t.Fatalf("stored %+v %v, want the new login", c, err)
 	}
 }

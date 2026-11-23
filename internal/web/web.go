@@ -23,7 +23,7 @@ import (
 type Connector interface {
 	Status(ctx context.Context, code account.InviteCode) (account.Status, error)
 	StartLogin(ctx context.Context, code account.InviteCode) (account.Login, error)
-	FinishLogin(ctx context.Context, cb account.Callback) (account.User, error)
+	FinishLogin(ctx context.Context, cb account.Callback) (account.Profile, error)
 	Disconnect(ctx context.Context, code account.InviteCode) (account.Profile, error)
 }
 
@@ -72,9 +72,10 @@ func (h *handler) connectPage(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	d := pageData{Title: "Connect Spotify", Invite: string(code), ShowForm: true, Connected: st.Connected}
-	if st.Connected {
-		d.Name = st.User.Name()
+	acc, connected := st.Profile.Account()
+	d := pageData{Title: "Connect Spotify", Invite: string(code), ShowForm: true, Connected: connected}
+	if connected {
+		d.Name = acc.Name()
 		if !st.ConnectedAt.IsZero() {
 			d.Since = st.ConnectedAt.Format(time.DateOnly)
 		}
@@ -121,14 +122,15 @@ func (h *handler) callback(w http.ResponseWriter, r *http.Request) {
 		cb.Nonce = c.Value
 	}
 	http.SetCookie(w, loginCookie("", -1))
-	user, err := h.c.FinishLogin(r.Context(), cb)
+	profile, err := h.c.FinishLogin(r.Context(), cb)
 	if err != nil {
 		h.fail(w, err)
 		return
 	}
-	h.log.Info("spotify account connected", "spotify_user", user.ID)
+	acc, _ := profile.Account()
+	h.log.Info("spotify account connected", "profile", profile.ID(), "spotify_user", acc.ID)
 	msg := "Spotify is connected. You can close this page."
-	if name := user.Name(); name != "" {
+	if name := acc.Name(); name != "" {
 		msg = "Spotify is connected as " + name + ". You can close this page."
 	}
 	h.render(w, http.StatusOK, pageData{Title: "Connected", Message: msg})

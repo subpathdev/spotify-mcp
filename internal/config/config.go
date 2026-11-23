@@ -21,7 +21,7 @@ type Config struct {
 	// PublicURL is the base of invite links.
 	PublicURL *url.URL
 	DataDir   string
-	Profile   account.Profile
+	ProfileID account.ProfileID
 	MCPAddr   string
 	WebAddr   string
 }
@@ -64,7 +64,7 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 	}
 
-	if c.Profile, err = account.ParseProfile(get("PROFILE", "default")); err != nil {
+	if c.ProfileID, err = account.ParseProfileID(get("PROFILE", "default")); err != nil {
 		return Config{}, fmt.Errorf("PROFILE: %w", err)
 	}
 	return c, nil

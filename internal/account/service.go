@@ -33,7 +33,7 @@ type Service struct {
 
 type pendingLogin struct {
 	invite   InviteHash
-	profile  Profile
+	profile  ProfileID
 	verifier string
 	nonce    string
 	expires  time.Time
@@ -48,11 +48,10 @@ func NewService(tokens Tokens, invites Invites, oauth OAuth, identity Identity, 
 	}
 }
 
-// Status is what an invite link's page shows.
+// Status is what an invite link's page shows: the invite's profile with its
+// connected account, and since when it is connected (zero if it isn't).
 type Status struct {
 	Profile     Profile
-	Connected   bool
-	User        User
 	ConnectedAt time.Time
 }
 
@@ -79,16 +78,11 @@ func (s *Service) Status(ctx context.Context, code InviteCode) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	st := Status{Profile: inv.Profile}
-	c, err := s.tokens.Connection(ctx, inv.Profile)
-	switch {
-	case errors.Is(err, ErrNotFound):
-	case err != nil:
-		return Status{}, fmt.Errorf("load connection: %w", err)
-	default:
-		st.Connected, st.User, st.ConnectedAt = true, c.User, c.ConnectedAt
+	p, err := loadProfile(ctx, s.tokens, inv.ProfileID)
+	if err != nil {
+		return Status{}, err
 	}
-	return st, nil
+	return Status{Profile: p, ConnectedAt: p.connectedAt}, nil
 }
 
 // StartLogin begins the OAuth login (state + PKCE) for an invite. The invite
@@ -112,7 +106,7 @@ func (s *Service) StartLogin(ctx context.Context, code InviteCode) (Login, error
 		return Login{}, ErrTooManyLogins
 	}
 	s.pending[state] = pendingLogin{
-		invite: inv.Hash, profile: inv.Profile,
+		invite: inv.Hash, profile: inv.ProfileID,
 		verifier: verifier, nonce: nonce, expires: now.Add(LoginTTL),
 	}
 	return Login{URL: s.oauth.AuthCodeURL(state, verifier), Nonce: nonce}, nil
@@ -120,55 +114,57 @@ func (s *Service) StartLogin(ctx context.Context, code InviteCode) (Login, error
 
 // FinishLogin completes a login: it exchanges the code, checks the account
 // may use the app, uses up the invite and stores the connection, replacing
-// any previous one. Each state can be finished at most once.
-func (s *Service) FinishLogin(ctx context.Context, cb Callback) (User, error) {
+// any previous one. Each state can be finished at most once. It returns the
+// profile with the newly connected account.
+func (s *Service) FinishLogin(ctx context.Context, cb Callback) (Profile, error) {
 	s.mu.Lock()
 	p, ok := s.pending[cb.State]
 	delete(s.pending, cb.State)
 	s.mu.Unlock()
 	if !ok || s.now().After(p.expires) || subtle.ConstantTimeCompare([]byte(cb.Nonce), []byte(p.nonce)) != 1 {
-		return User{}, ErrLoginExpired
+		return nil, ErrLoginExpired
 	}
 	if cb.Error == "access_denied" {
-		return User{}, ErrLoginCancelled
+		return nil, ErrLoginCancelled
 	}
 	if cb.Error != "" {
-		return User{}, fmt.Errorf("spotify refused the login: %s", cb.Error)
+		return nil, fmt.Errorf("spotify refused the login: %s", cb.Error)
 	}
 
 	tok, err := s.oauth.Exchange(ctx, cb.Code, p.verifier)
 	if err != nil {
-		return User{}, fmt.Errorf("exchange code: %w", err)
+		return nil, fmt.Errorf("exchange code: %w", err)
 	}
 	if tok.RefreshToken == "" {
-		return User{}, errors.New("spotify sent no refresh token")
+		return nil, errors.New("spotify sent no refresh token")
 	}
 	// Before the invite is used up: an account that isn't allowlisted yet can
 	// try again with the same link once the owner added it.
-	user, err := s.identity.User(ctx, tok.AccessToken)
+	acc, err := s.identity.Account(ctx, tok.AccessToken)
 	if err != nil {
-		return User{}, fmt.Errorf("look up account: %w", err)
+		return nil, fmt.Errorf("look up account: %w", err)
 	}
 	if _, err := s.takeInvite(ctx, p.invite); err != nil {
-		return User{}, err
+		return nil, err
 	}
-	c := Connection{Token: tok, User: user, ConnectedAt: s.now()}
+	c := Connection{Token: tok, Account: acc, ConnectedAt: s.now()}
 	if err := s.tokens.SaveConnection(ctx, p.profile, c); err != nil {
-		return User{}, fmt.Errorf("save connection: %w", err)
+		return nil, fmt.Errorf("save connection: %w", err)
 	}
-	return user, nil
+	return newProfile(p.profile, &c), nil
 }
 
-// Disconnect uses up the invite and deletes its profile's connection.
+// Disconnect uses up the invite and deletes its profile's connection. It
+// returns the profile, now without an account.
 func (s *Service) Disconnect(ctx context.Context, code InviteCode) (Profile, error) {
 	inv, err := s.takeInvite(ctx, hashInvite(code))
 	if err != nil {
 		return nil, err
 	}
-	if err := s.tokens.DeleteConnection(ctx, inv.Profile); err != nil {
+	if err := s.tokens.DeleteConnection(ctx, inv.ProfileID); err != nil {
 		return nil, fmt.Errorf("delete connection: %w", err)
 	}
-	return inv.Profile, nil
+	return newProfile(inv.ProfileID, nil), nil
 }
 
 func (s *Service) checkInvite(ctx context.Context, code InviteCode) (Invite, error) {

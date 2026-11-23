@@ -49,8 +49,8 @@ func (f *fakeOAuth) Refresh(context.Context, string) (account.Token, error) {
 
 type fakeIdentity struct{ err error }
 
-func (f *fakeIdentity) User(context.Context, string) (account.User, error) {
-	return account.User{ID: "jan", DisplayName: "Jan"}, f.err
+func (f *fakeIdentity) Account(context.Context, string) (account.SpotifyAccount, error) {
+	return account.SpotifyAccount{ID: "jan", DisplayName: "Jan"}, f.err
 }
 
 type env struct {
@@ -73,13 +73,7 @@ func newEnv(t *testing.T) *env {
 	return &env{srv: srv, inviter: account.NewInviter(st), store: st, identity: id}
 }
 
-var profile = func() account.Profile {
-	p, err := account.ParseProfile("default")
-	if err != nil {
-		panic(err)
-	}
-	return p
-}()
+const profile = account.ProfileID("default")
 
 func (e *env) invite(t *testing.T) string {
 	t.Helper()

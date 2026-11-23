@@ -12,16 +12,7 @@ import (
 	"github.com/subpathdev/spotify-mcp/internal/filestore"
 )
 
-var profile = mustProfile("default")
-
-// mustProfile parses a profile ID that the test knows to be valid.
-func mustProfile(id string) account.Profile {
-	p, err := account.ParseProfile(id)
-	if err != nil {
-		panic(err)
-	}
-	return p
-}
+const profile = account.ProfileID("default")
 
 // fakeOAuth issues tokens for the code "good" and the verifier of the last
 // started login.
@@ -58,8 +49,8 @@ func (f *fakeOAuth) Refresh(ctx context.Context, rt string) (account.Token, erro
 
 type fakeIdentity struct{ err error }
 
-func (f fakeIdentity) User(context.Context, string) (account.User, error) {
-	return account.User{ID: "jan", DisplayName: "Jan"}, f.err
+func (f fakeIdentity) Account(context.Context, string) (account.SpotifyAccount, error) {
+	return account.SpotifyAccount{ID: "jan", DisplayName: "Jan"}, f.err
 }
 
 type env struct {
@@ -112,15 +103,21 @@ func TestLoginConnectsAndUsesUpInvite(t *testing.T) {
 	code := e.invite(t)
 
 	st, err := e.svc.Status(ctx, code)
-	if err != nil || st.Connected || st.Profile.ID() != profile.ID() {
+	if err != nil || st.Profile.ID() != profile || !st.ConnectedAt.IsZero() {
 		t.Fatalf("status before: %+v %v", st, err)
 	}
-	user, err := e.svc.FinishLogin(ctx, e.start(t, code))
-	if err != nil || user.Name() != "Jan" {
-		t.Fatalf("finish: %+v %v", user, err)
+	if _, connected := st.Profile.Account(); connected {
+		t.Fatal("connected before login")
+	}
+	p, err := e.svc.FinishLogin(ctx, e.start(t, code))
+	if err != nil || p.ID() != profile {
+		t.Fatalf("finish: %v %v", p, err)
+	}
+	if acc, ok := p.Account(); !ok || acc.Name() != "Jan" {
+		t.Fatalf("finish account: %+v %v", acc, ok)
 	}
 	c, err := e.store.Connection(ctx, profile)
-	if err != nil || c.Token.RefreshToken != "r1" || c.User.ID != "jan" || !c.ConnectedAt.Equal(e.now) {
+	if err != nil || c.Token.RefreshToken != "r1" || c.Account.ID != "jan" || !c.ConnectedAt.Equal(e.now) {
 		t.Fatalf("stored: %+v %v", c, err)
 	}
 	if _, err := e.svc.Status(ctx, code); !errors.Is(err, account.ErrInvalidInvite) {
@@ -183,11 +180,19 @@ func TestDisconnect(t *testing.T) {
 		t.Fatal(err)
 	}
 	code := e.invite(t)
-	if st, _ := e.svc.Status(ctx, code); !st.Connected || st.User.Name() != "Jan" {
-		t.Fatalf("status: %+v", st)
+	st, err := e.svc.Status(ctx, code)
+	if err != nil || !st.ConnectedAt.Equal(e.now) {
+		t.Fatalf("status: %+v %v", st, err)
 	}
-	if p, err := e.svc.Disconnect(ctx, code); err != nil || p.ID() != profile.ID() {
-		t.Fatalf("disconnect: %q %v", p, err)
+	if acc, ok := st.Profile.Account(); !ok || acc.Name() != "Jan" {
+		t.Fatalf("status account: %+v %v", acc, ok)
+	}
+	p, err := e.svc.Disconnect(ctx, code)
+	if err != nil || p.ID() != profile {
+		t.Fatalf("disconnect: %v %v", p, err)
+	}
+	if _, ok := p.Account(); ok {
+		t.Fatal("account kept after disconnect")
 	}
 	if _, err := e.store.Connection(ctx, profile); !errors.Is(err, account.ErrNotFound) {
 		t.Fatalf("connection kept: %v", err)
@@ -210,21 +215,45 @@ func TestInvites(t *testing.T) {
 	if _, err := e.svc.StartLogin(ctx, code); !errors.Is(err, account.ErrInvalidInvite) {
 		t.Fatalf("expired invite accepted: %v", err)
 	}
-	if _, _, err := e.inviter.CreateInvite(ctx, nil, time.Hour); err == nil {
-		t.Fatal("nil profile accepted")
+	if _, _, err := e.inviter.CreateInvite(ctx, "../x", time.Hour); err == nil {
+		t.Fatal("invalid profile accepted")
 	}
 	if _, _, err := e.inviter.CreateInvite(ctx, profile, 0); err == nil {
 		t.Fatal("zero TTL accepted")
 	}
 }
 
-func TestParseProfile(t *testing.T) {
+func TestParseProfileID(t *testing.T) {
 	for _, s := range []string{"", "A", "../x", "a/b", "-a", string(make([]byte, 64))} {
-		if _, err := account.ParseProfile(s); err == nil {
+		if _, err := account.ParseProfileID(s); err == nil {
 			t.Errorf("%q accepted", s)
 		}
 	}
-	if p, err := account.ParseProfile("jan-2"); err != nil || p.ID() != "jan-2" {
-		t.Fatalf("valid profile: %v %v", p, err)
+	if id, err := account.ParseProfileID("jan-2"); err != nil || id != "jan-2" {
+		t.Fatalf("valid profile: %q %v", id, err)
+	}
+}
+
+func TestProfiles(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, nil)
+	profiles := account.NewProfiles(e.store)
+	p, err := profiles.Profile(ctx, profile)
+	if err != nil || p.ID() != profile {
+		t.Fatalf("profile: %v %v", p, err)
+	}
+	if _, ok := p.Account(); ok {
+		t.Fatal("account without a connection")
+	}
+	if _, err := e.svc.FinishLogin(ctx, e.start(t, e.invite(t))); err != nil {
+		t.Fatal(err)
+	}
+	// A loaded profile is a snapshot: p stays as it was, a new load sees the login.
+	if _, ok := p.Account(); ok {
+		t.Fatal("snapshot changed")
+	}
+	p, err = profiles.Profile(ctx, profile)
+	if acc, ok := p.Account(); err != nil || !ok || acc.ID != "jan" {
+		t.Fatalf("after login: %+v %v %v", acc, ok, err)
 	}
 }

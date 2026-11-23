@@ -66,12 +66,12 @@ func invite(args []string) error {
 	if err != nil {
 		return err
 	}
-	code, expires, err := account.NewInviter(store).CreateInvite(context.Background(), cfg.Profile, *ttl)
+	code, expires, err := account.NewInviter(store).CreateInvite(context.Background(), cfg.ProfileID, *ttl)
 	if err != nil {
 		return err
 	}
 	fmt.Println(cfg.InviteURL(code))
-	fmt.Fprintf(os.Stderr, "One-time link for profile %q, valid until %s.\n", cfg.Profile.ID(), expires.Format("2006-01-02 15:04 MST"))
+	fmt.Fprintf(os.Stderr, "One-time link for profile %q, valid until %s.\n", cfg.ProfileID, expires.Format("2006-01-02 15:04 MST"))
 	return nil
 }
 
@@ -92,12 +92,19 @@ func serve(log *slog.Logger) error {
 		ClientID: cfg.ClientID, ClientSecret: cfg.ClientSecret, RedirectURL: cfg.RedirectURL.String(),
 	})
 	api := spotify.NewAPI(spotify.DefaultAPIURL, nil)
-	tokens := account.NewTokenSource(store, oauth, cfg.Profile)
+	tokens := account.NewTokenSource(store, oauth, cfg.ProfileID)
 	player := playback.NewService(spotify.NewPlayer(api, tokens))
 	accounts := account.NewService(store, store, oauth, api)
 
-	if _, err := store.Connection(context.Background(), cfg.Profile); errors.Is(err, account.ErrNotFound) {
-		log.Warn("no Spotify account connected yet; run 'spotify-mcp invite' and open the link", "profile", cfg.Profile.ID())
+	// Only for the log: a broken token file shouldn't stop the server, the
+	// tools report it when they need the token.
+	prof, err := account.NewProfiles(store).Profile(context.Background(), cfg.ProfileID)
+	if err != nil {
+		log.Warn("can't read the connected account", "profile", cfg.ProfileID, "err", err)
+	} else if acc, ok := prof.Account(); ok {
+		log.Info("spotify account connected", "profile", prof.ID(), "spotify_user", acc.ID)
+	} else {
+		log.Warn("no Spotify account connected yet; run 'spotify-mcp invite' and open the link", "profile", prof.ID())
 	}
 
 	servers := []*http.Server{
@@ -114,7 +121,7 @@ func serve(log *slog.Logger) error {
 			WriteTimeout:      30 * time.Second,
 		},
 	}
-	log.Info("spotify-mcp started", "version", version, "profile", cfg.Profile.ID(), "connect_url", cfg.PublicURL.JoinPath("connect").String())
+	log.Info("spotify-mcp started", "version", version, "profile", cfg.ProfileID, "connect_url", cfg.PublicURL.JoinPath("connect").String())
 	return run(log, servers)
 }
 

@@ -53,14 +53,14 @@ type connectionRecord struct {
 func toRecord(c account.Connection) connectionRecord {
 	return connectionRecord{
 		RefreshToken: c.Token.RefreshToken, AccessToken: c.Token.AccessToken, Expiry: c.Token.Expiry,
-		SpotifyUserID: c.User.ID, DisplayName: c.User.DisplayName, ConnectedAt: c.ConnectedAt,
+		SpotifyUserID: c.Account.ID, DisplayName: c.Account.DisplayName, ConnectedAt: c.ConnectedAt,
 	}
 }
 
 func (r connectionRecord) connection() account.Connection {
 	return account.Connection{
 		Token:       account.Token{AccessToken: r.AccessToken, RefreshToken: r.RefreshToken, Expiry: r.Expiry},
-		User:        account.User{ID: r.SpotifyUserID, DisplayName: r.DisplayName},
+		Account:     account.SpotifyAccount{ID: r.SpotifyUserID, DisplayName: r.DisplayName},
 		ConnectedAt: r.ConnectedAt,
 	}
 }
@@ -73,11 +73,11 @@ type inviteRecord struct {
 }
 
 func (r inviteRecord) invite(h account.InviteHash) (account.Invite, error) {
-	p, err := account.ParseProfile(r.Profile)
+	id, err := account.ParseProfileID(r.Profile)
 	if err != nil {
 		return account.Invite{}, fmt.Errorf("invite %s: %w", h, err)
 	}
-	return account.Invite{Hash: h, Profile: p, Expires: r.Expires}, nil
+	return account.Invite{Hash: h, ProfileID: id, Expires: r.Expires}, nil
 }
 
 // lock takes the in-process and the cross-process lock.
@@ -91,22 +91,18 @@ func (s *Store) lock() (unlock func(), err error) {
 	return func() { release(); s.mu.Unlock() }, nil
 }
 
-func (s *Store) connectionPath(p account.Profile) (string, error) {
-	if p == nil {
-		return "", errors.New("no profile given")
-	}
-	// ParseProfile validates IDs, but Profile is an interface that other
-	// code may implement; check again because the ID ends up in a file name.
-	id := p.ID()
-	if _, err := account.ParseProfile(id); err != nil {
+func (s *Store) connectionPath(id account.ProfileID) (string, error) {
+	// IDs are validated when parsed; check again because a ProfileID can also
+	// be made by conversion, and it ends up in a file name.
+	if _, err := account.ParseProfileID(string(id)); err != nil {
 		return "", err
 	}
-	return filepath.Join(s.dir, "tokens", id+".json"), nil
+	return filepath.Join(s.dir, "tokens", string(id)+".json"), nil
 }
 
 // Connection implements account.Tokens.
-func (s *Store) Connection(_ context.Context, p account.Profile) (account.Connection, error) {
-	path, err := s.connectionPath(p)
+func (s *Store) Connection(_ context.Context, id account.ProfileID) (account.Connection, error) {
+	path, err := s.connectionPath(id)
 	if err != nil {
 		return account.Connection{}, err
 	}
@@ -123,8 +119,8 @@ func (s *Store) Connection(_ context.Context, p account.Profile) (account.Connec
 }
 
 // SaveConnection implements account.Tokens.
-func (s *Store) SaveConnection(_ context.Context, p account.Profile, c account.Connection) error {
-	path, err := s.connectionPath(p)
+func (s *Store) SaveConnection(_ context.Context, id account.ProfileID, c account.Connection) error {
+	path, err := s.connectionPath(id)
 	if err != nil {
 		return err
 	}
@@ -137,8 +133,8 @@ func (s *Store) SaveConnection(_ context.Context, p account.Profile, c account.C
 }
 
 // UpdateConnection implements account.Tokens. fn runs under the lock.
-func (s *Store) UpdateConnection(_ context.Context, p account.Profile, fn func(*account.Connection) error) error {
-	path, err := s.connectionPath(p)
+func (s *Store) UpdateConnection(_ context.Context, id account.ProfileID, fn func(*account.Connection) error) error {
+	path, err := s.connectionPath(id)
 	if err != nil {
 		return err
 	}
@@ -159,8 +155,8 @@ func (s *Store) UpdateConnection(_ context.Context, p account.Profile, fn func(*
 }
 
 // DeleteConnection implements account.Tokens.
-func (s *Store) DeleteConnection(_ context.Context, p account.Profile) error {
-	path, err := s.connectionPath(p)
+func (s *Store) DeleteConnection(_ context.Context, id account.ProfileID) error {
+	path, err := s.connectionPath(id)
 	if err != nil {
 		return err
 	}
@@ -205,7 +201,7 @@ func (s *Store) changeInvites(fn func(map[account.InviteHash]inviteRecord) error
 // AddInvite implements account.Invites.
 func (s *Store) AddInvite(_ context.Context, i account.Invite) error {
 	return s.changeInvites(func(inv map[account.InviteHash]inviteRecord) error {
-		inv[i.Hash] = inviteRecord{Profile: i.Profile.ID(), Expires: i.Expires}
+		inv[i.Hash] = inviteRecord{Profile: string(i.ProfileID), Expires: i.Expires}
 		return nil
 	})
 }

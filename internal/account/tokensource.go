@@ -17,13 +17,13 @@ import (
 type TokenSource struct {
 	tokens  Tokens
 	oauth   OAuth
-	profile Profile
+	profile ProfileID
 	now     func() time.Time
 }
 
 // NewTokenSource returns a TokenSource for p.
-func NewTokenSource(tokens Tokens, oauth OAuth, p Profile, opts ...Option) *TokenSource {
-	return &TokenSource{tokens: tokens, oauth: oauth, profile: p, now: apply(opts).now}
+func NewTokenSource(tokens Tokens, oauth OAuth, id ProfileID, opts ...Option) *TokenSource {
+	return &TokenSource{tokens: tokens, oauth: oauth, profile: id, now: apply(opts).now}
 }
 
 // AccessToken returns a valid access token, or ErrNotConnected.

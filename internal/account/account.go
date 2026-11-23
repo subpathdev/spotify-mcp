@@ -14,52 +14,65 @@ import (
 	"time"
 )
 
-// Profile is one connected account. Phase 1 uses a single profile; it is an
-// interface so more about a profile (a display name, the person a sign-in
-// system maps to it) can be added later without changing the code that only
-// passes profiles around.
-//
-// Profiles are not comparable with ==; compare their IDs.
-type Profile interface {
-	// ID is the validated identifier: 1-63 lower-case letters, digits and
-	// dashes. Adapters use it in file and key names.
-	ID() string
-}
-
-// profile is the Profile built by ParseProfile.
-type profile struct {
-	id string
-}
-
-func (p *profile) ID() string { return p.id }
-
-// String makes a profile print as its ID in logs and messages.
-func (p *profile) String() string { return p.id }
+// ProfileID identifies a profile: 1-63 lower-case letters, digits and
+// dashes. Adapters use it in file and key names. Get one from ParseProfileID.
+type ProfileID string
 
 var profileRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
-// ParseProfile checks a profile ID and returns its Profile. Adapters may use
-// the ID in file or key names, so it is restricted to lower-case letters,
-// digits and dashes.
-func ParseProfile(id string) (Profile, error) {
-	if !profileRe.MatchString(id) {
-		return nil, fmt.Errorf("invalid profile %q: use 1-63 lower-case letters, digits and dashes", id)
+// ParseProfileID checks a profile ID.
+func ParseProfileID(s string) (ProfileID, error) {
+	if !profileRe.MatchString(s) {
+		return "", fmt.Errorf("invalid profile %q: use 1-63 lower-case letters, digits and dashes", s)
 	}
-	return &profile{id: id}, nil
+	return ProfileID(s), nil
 }
 
-// User is the Spotify account behind a connection.
-type User struct {
+// Profile is one slot a Spotify account can be connected to, as it was when
+// it was loaded (see Profiles). Phase 1 uses a single profile; more about a
+// profile (a display name, the person a sign-in system maps to it) is added
+// here later.
+type Profile interface {
+	ID() ProfileID
+	// Account is the connected Spotify account; false if none is connected.
+	Account() (SpotifyAccount, bool)
+}
+
+// profile is the Profile this package builds.
+type profile struct {
+	id          ProfileID
+	account     SpotifyAccount
+	connected   bool
+	connectedAt time.Time // for Status; not part of Profile
+}
+
+// newProfile builds a profile from its connection; c is nil if it has none.
+func newProfile(id ProfileID, c *Connection) *profile {
+	p := &profile{id: id}
+	if c != nil {
+		p.account, p.connected, p.connectedAt = c.Account, true, c.ConnectedAt
+	}
+	return p
+}
+
+func (p *profile) ID() ProfileID                   { return p.id }
+func (p *profile) Account() (SpotifyAccount, bool) { return p.account, p.connected }
+
+// String makes a profile print as its ID in logs and messages.
+func (p *profile) String() string { return string(p.id) }
+
+// SpotifyAccount is the Spotify account connected to a profile.
+type SpotifyAccount struct {
 	ID          string
 	DisplayName string
 }
 
 // Name is what to show a person: the display name, else the account ID.
-func (u User) Name() string {
-	if u.DisplayName != "" {
-		return u.DisplayName
+func (a SpotifyAccount) Name() string {
+	if a.DisplayName != "" {
+		return a.DisplayName
 	}
-	return u.ID
+	return a.ID
 }
 
 // Token is an OAuth token pair as Spotify issues it.
@@ -75,7 +88,7 @@ const expiryDelta = 30 * time.Second
 // Connection is what is stored per profile.
 type Connection struct {
 	Token       Token
-	User        User
+	Account     SpotifyAccount
 	ConnectedAt time.Time
 }
 
@@ -92,9 +105,9 @@ type InviteHash string
 
 // Invite lets whoever holds its code connect or disconnect one profile.
 type Invite struct {
-	Hash    InviteHash
-	Profile Profile
-	Expires time.Time
+	Hash      InviteHash
+	ProfileID ProfileID
+	Expires   time.Time
 }
 
 // Errors returned by this package and by the ports' implementations.
@@ -127,15 +140,15 @@ var (
 // Tokens stores one Connection per profile.
 type Tokens interface {
 	// Connection returns ErrNotFound if the profile has none.
-	Connection(ctx context.Context, p Profile) (Connection, error)
+	Connection(ctx context.Context, id ProfileID) (Connection, error)
 	// SaveConnection replaces the profile's connection.
-	SaveConnection(ctx context.Context, p Profile, c Connection) error
+	SaveConnection(ctx context.Context, id ProfileID, c Connection) error
 	// UpdateConnection reads, changes and writes the connection as one step:
 	// no other write to the profile may happen in between. It returns
 	// ErrNotFound if the profile has none, and writes nothing if fn fails.
-	UpdateConnection(ctx context.Context, p Profile, fn func(*Connection) error) error
+	UpdateConnection(ctx context.Context, id ProfileID, fn func(*Connection) error) error
 	// DeleteConnection forgets the profile's connection; a missing one is fine.
-	DeleteConnection(ctx context.Context, p Profile) error
+	DeleteConnection(ctx context.Context, id ProfileID) error
 }
 
 // Invites stores pending invites.
@@ -161,8 +174,8 @@ type OAuth interface {
 	Refresh(ctx context.Context, refreshToken string) (Token, error)
 }
 
-// Identity tells who an access token belongs to.
+// Identity tells which Spotify account an access token belongs to.
 type Identity interface {
-	// User returns ErrNotAllowlisted for accounts the app may not serve.
-	User(ctx context.Context, accessToken string) (User, error)
+	// Account returns ErrNotAllowlisted for accounts the app may not serve.
+	Account(ctx context.Context, accessToken string) (SpotifyAccount, error)
 }

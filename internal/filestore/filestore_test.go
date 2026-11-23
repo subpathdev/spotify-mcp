@@ -13,16 +13,7 @@ import (
 	"github.com/subpathdev/spotify-mcp/internal/account"
 )
 
-var profile = mustProfile("default")
-
-// mustProfile parses a profile ID that the test knows to be valid.
-func mustProfile(id string) account.Profile {
-	p, err := account.ParseProfile(id)
-	if err != nil {
-		panic(err)
-	}
-	return p
-}
+const profile = account.ProfileID("default")
 
 func open(t *testing.T, dir string) *Store {
 	t.Helper()
@@ -42,7 +33,7 @@ func TestConnectionRoundTrip(t *testing.T) {
 	}
 	want := account.Connection{
 		Token:       account.Token{AccessToken: "a", RefreshToken: "r", Expiry: time.Date(2026, 11, 22, 13, 0, 0, 0, time.UTC)},
-		User:        account.User{ID: "jan", DisplayName: "Jan"},
+		Account:     account.SpotifyAccount{ID: "jan", DisplayName: "Jan"},
 		ConnectedAt: time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC),
 	}
 	if err := s.SaveConnection(ctx, profile, want); err != nil {
@@ -85,19 +76,13 @@ func TestUpdateConnection(t *testing.T) {
 	}
 }
 
-// badProfile is a Profile that skipped ParseProfile, as another
-// implementation of the interface could.
-type badProfile string
-
-func (b badProfile) ID() string { return string(b) }
-
 func TestRejectsBadProfile(t *testing.T) {
 	s := open(t, t.TempDir())
-	if err := s.SaveConnection(context.Background(), badProfile("../x"), account.Connection{}); err == nil {
-		t.Fatal("path traversal accepted")
-	}
-	if err := s.SaveConnection(context.Background(), nil, account.Connection{}); err == nil {
-		t.Fatal("nil profile accepted")
+	// A ProfileID made by conversion skips ParseProfileID.
+	for _, id := range []account.ProfileID{"../x", ""} {
+		if err := s.SaveConnection(context.Background(), id, account.Connection{}); err == nil {
+			t.Fatalf("profile %q accepted", id)
+		}
 	}
 }
 
@@ -105,11 +90,11 @@ func TestInviteTakenOnce(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	s := open(t, dir)
-	inv := account.Invite{Hash: "h1", Profile: profile, Expires: time.Now().Add(time.Hour)}
+	inv := account.Invite{Hash: "h1", ProfileID: profile, Expires: time.Now().Add(time.Hour)}
 	if err := s.AddInvite(ctx, inv); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.Invite(ctx, "h1"); err != nil || got.Profile.ID() != profile.ID() {
+	if got, err := s.Invite(ctx, "h1"); err != nil || got.ProfileID != profile {
 		t.Fatalf("invite: %+v %v", got, err)
 	}
 
@@ -149,7 +134,7 @@ func TestConcurrentInvitesFromTwoStores(t *testing.T) {
 		}
 		wg.Go(func() {
 			h := account.InviteHash(strings.Repeat("x", i+1))
-			if err := st.AddInvite(ctx, account.Invite{Hash: h, Profile: profile, Expires: time.Now().Add(time.Hour)}); err != nil {
+			if err := st.AddInvite(ctx, account.Invite{Hash: h, ProfileID: profile, Expires: time.Now().Add(time.Hour)}); err != nil {
 				t.Error(err)
 			}
 		})
@@ -166,8 +151,8 @@ func TestPruneInvites(t *testing.T) {
 	ctx := context.Background()
 	s := open(t, t.TempDir())
 	now := time.Now()
-	_ = s.AddInvite(ctx, account.Invite{Hash: "old", Profile: profile, Expires: now.Add(-time.Minute)})
-	_ = s.AddInvite(ctx, account.Invite{Hash: "new", Profile: profile, Expires: now.Add(time.Minute)})
+	_ = s.AddInvite(ctx, account.Invite{Hash: "old", ProfileID: profile, Expires: now.Add(-time.Minute)})
+	_ = s.AddInvite(ctx, account.Invite{Hash: "new", ProfileID: profile, Expires: now.Add(time.Minute)})
 	if err := s.PruneInvites(ctx, now); err != nil {
 		t.Fatal(err)
 	}

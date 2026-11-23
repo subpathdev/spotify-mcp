@@ -198,10 +198,10 @@ func TestStateNothingPlaying(t *testing.T) {
 	}
 }
 
-func TestUserNotAllowlisted(t *testing.T) {
+func TestAccountNotAllowlisted(t *testing.T) {
 	srv := httptest.NewServer(spotifyError(http.StatusForbidden, ""))
 	defer srv.Close()
-	if _, err := NewAPI(srv.URL, srv.Client()).User(context.Background(), "t"); !errors.Is(err, account.ErrNotAllowlisted) {
+	if _, err := NewAPI(srv.URL, srv.Client()).Account(context.Background(), "t"); !errors.Is(err, account.ErrNotAllowlisted) {
 		t.Fatalf("got %v", err)
 	}
 }
