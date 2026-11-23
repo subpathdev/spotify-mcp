@@ -66,7 +66,14 @@ func invite(args []string) error {
 	if err != nil {
 		return err
 	}
-	code, expires, err := account.NewInviter(store).CreateInvite(context.Background(), cfg.ProfileID(), *ttl)
+	// Creating an invite never calls Spotify, so the credentials may be
+	// missing here; the OAuth and API adapters are only wired up.
+	oauth := spotify.NewOAuth(spotify.OAuthConfig{
+		ClientID: cfg.ClientID(), ClientSecret: cfg.ClientSecret(), RedirectURL: cfg.RedirectURL(),
+	})
+	api := spotify.NewAPI(spotify.DefaultAPIURL, nil)
+	accounts := account.NewService(store, store, oauth, api, account.SystemClock())
+	code, expires, err := accounts.CreateInvite(context.Background(), cfg.ProfileID(), *ttl)
 	if err != nil {
 		return err
 	}
@@ -92,9 +99,10 @@ func serve(log *slog.Logger) error {
 		ClientID: cfg.ClientID(), ClientSecret: cfg.ClientSecret(), RedirectURL: cfg.RedirectURL(),
 	})
 	api := spotify.NewAPI(spotify.DefaultAPIURL, nil)
-	tokens := account.NewTokenSource(store, oauth, cfg.ProfileID())
+	clock := account.SystemClock()
+	tokens := account.NewTokenSource(store, oauth, cfg.ProfileID(), clock)
 	player := playback.NewService(spotify.NewPlayer(api, tokens))
-	accounts := account.NewService(store, store, oauth, api)
+	accounts := account.NewService(store, store, oauth, api, clock)
 
 	// Only for the log: a broken token file shouldn't stop the server, the
 	// tools report it when they need the token.

@@ -25,6 +25,11 @@ func mustProfileID(s string) account.ProfileID {
 	return id
 }
 
+// clockFunc is a test Clock.
+type clockFunc func() time.Time
+
+func (f clockFunc) Now() time.Time { return f() }
+
 func must[T any](v T, err error) T {
 	if err != nil {
 		panic(err)
@@ -87,11 +92,10 @@ func (f fakeIdentity) Account(context.Context, string) (account.SpotifyAccount, 
 }
 
 type env struct {
-	store   filestore.Store
-	oauth   *fakeOAuth
-	inviter account.Inviter
-	svc     account.Service
-	now     time.Time
+	store filestore.Store
+	oauth *fakeOAuth
+	svc   account.Service
+	now   time.Time
 }
 
 func newEnv(t *testing.T, identityErr error) *env {
@@ -101,15 +105,14 @@ func newEnv(t *testing.T, identityErr error) *env {
 		t.Fatal(err)
 	}
 	e := &env{store: st, oauth: &fakeOAuth{}, now: time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)}
-	clock := account.WithClock(func() time.Time { return e.now })
-	e.inviter = account.NewInviter(st, clock)
+	clock := clockFunc(func() time.Time { return e.now })
 	e.svc = account.NewService(st, st, e.oauth, fakeIdentity{err: identityErr}, clock)
 	return e
 }
 
 func (e *env) invite(t *testing.T) account.InviteCode {
 	t.Helper()
-	code, _, err := e.inviter.CreateInvite(context.Background(), profile, time.Hour)
+	code, _, err := e.svc.CreateInvite(context.Background(), profile, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,10 +255,10 @@ func TestInvites(t *testing.T) {
 	if _, err := e.svc.StartLogin(ctx, code); !errors.Is(err, account.ErrInvalidInvite) {
 		t.Fatalf("expired invite accepted: %v", err)
 	}
-	if _, _, err := e.inviter.CreateInvite(ctx, nil, time.Hour); err == nil {
+	if _, _, err := e.svc.CreateInvite(ctx, nil, time.Hour); err == nil {
 		t.Fatal("nil profile accepted")
 	}
-	if _, _, err := e.inviter.CreateInvite(ctx, profile, 0); err == nil {
+	if _, _, err := e.svc.CreateInvite(ctx, profile, 0); err == nil {
 		t.Fatal("zero TTL accepted")
 	}
 }

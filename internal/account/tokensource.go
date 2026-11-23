@@ -27,12 +27,12 @@ type tokenSource struct {
 	tokens  Tokens
 	oauth   OAuth
 	profile ProfileID
-	now     func() time.Time
+	clock   Clock
 }
 
 // NewTokenSource returns a TokenSource for the profile.
-func NewTokenSource(tokens Tokens, oauth OAuth, id ProfileID, opts ...Option) TokenSource {
-	return &tokenSource{tokens: tokens, oauth: oauth, profile: id, now: apply(opts).now}
+func NewTokenSource(tokens Tokens, oauth OAuth, id ProfileID, clock Clock) TokenSource {
+	return &tokenSource{tokens: tokens, oauth: oauth, profile: id, clock: clock}
 }
 
 func (ts *tokenSource) AccessToken(ctx context.Context) (string, error) {
@@ -46,13 +46,13 @@ func (ts *tokenSource) AccessToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("load connection: %w", err)
 	}
-	if accessValid(c, ts.now()) {
+	if accessValid(c, ts.clock.Now()) {
 		return c.Token().AccessToken(), nil
 	}
 
 	var access string
 	err = ts.tokens.UpdateConnection(ctx, ts.profile, func(c Connection) (Connection, error) {
-		if accessValid(c, ts.now()) { // refreshed by someone else meanwhile
+		if accessValid(c, ts.clock.Now()) { // refreshed by someone else meanwhile
 			access = c.Token().AccessToken()
 			return c, nil
 		}

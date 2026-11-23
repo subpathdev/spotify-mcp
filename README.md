@@ -118,7 +118,7 @@ flowchart LR
   account -- "OAuth / Identity ports" --> spotify
 ```
 
-- `internal/playback` and `internal/account` are the domain: typed values (`URI`, `DeviceID`, `Profile`, `InviteCode`), the rules, and the ports (interfaces) they need.
+- `internal/playback` and `internal/account` are the domain: each has a `Service` with the use cases, the rules, and the ports (interfaces) it needs. Values and entities (`URI`, `DeviceID`, `ProfileID`, `InviteCode`, `Token`, …) are exported interfaces with unexported implementations, created only through constructors that validate (`ParseX`, `NewX`, `RestoreX` for stored data). The time comes from an injected `Clock`.
 - `internal/spotify` (Web API + OAuth) and `internal/filestore` (JSON files) implement the ports. Wire and file formats stay unexported in them.
 - `internal/mcpserver` and `internal/web` are the transports. Each depends on a small interface it defines itself.
 

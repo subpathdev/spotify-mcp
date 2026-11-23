@@ -57,11 +57,16 @@ func (f *fakeIdentity) Account(context.Context, string) (account.SpotifyAccount,
 }
 
 type env struct {
+	svc      account.Service
 	srv      *httptest.Server
-	inviter  account.Inviter
 	store    filestore.Store
 	identity *fakeIdentity
 }
+
+// fixedClock is a test Clock that always tells the same time.
+type fixedClock time.Time
+
+func (c fixedClock) Now() time.Time { return time.Time(c) }
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
@@ -70,10 +75,11 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	id := &fakeIdentity{}
-	svc := account.NewService(st, st, &fakeOAuth{verifiers: map[string]string{}}, id)
+	clock := fixedClock(time.Date(2026, 11, 23, 9, 0, 0, 0, time.UTC))
+	svc := account.NewService(st, st, &fakeOAuth{verifiers: map[string]string{}}, id, clock)
 	srv := httptest.NewTLSServer(web.NewHandler(svc, slog.New(slog.DiscardHandler)))
 	t.Cleanup(srv.Close)
-	return &env{srv: srv, inviter: account.NewInviter(st), store: st, identity: id}
+	return &env{svc: svc, srv: srv, store: st, identity: id}
 }
 
 var profile = mustProfileID("default")
@@ -89,7 +95,7 @@ func mustProfileID(s string) account.ProfileID {
 
 func (e *env) invite(t *testing.T) string {
 	t.Helper()
-	code, _, err := e.inviter.CreateInvite(context.Background(), profile, time.Hour)
+	code, _, err := e.svc.CreateInvite(context.Background(), profile, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

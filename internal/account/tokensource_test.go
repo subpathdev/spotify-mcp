@@ -17,7 +17,7 @@ func (e *env) connect(t *testing.T, c account.Connection) {
 }
 
 func (e *env) tokens() account.TokenSource {
-	return account.NewTokenSource(e.store, e.oauth, profile, account.WithClock(func() time.Time { return e.now }))
+	return account.NewTokenSource(e.store, e.oauth, profile, clockFunc(func() time.Time { return e.now }))
 }
 
 func expired(rt string) account.Connection {

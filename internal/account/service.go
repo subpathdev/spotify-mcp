@@ -17,8 +17,13 @@ const (
 	maxPending = 100
 )
 
-// Service runs logins and disconnects for holders of an invite.
+// Service is the account domain's use cases: it creates invite links and runs
+// logins and disconnects for whoever holds one.
 type Service interface {
+	// CreateInvite returns a new one-time code for the profile and when it
+	// expires. It needs no Spotify access, so the invite command can call it
+	// without credentials.
+	CreateInvite(ctx context.Context, id ProfileID, ttl time.Duration) (InviteCode, time.Time, error)
 	// Status reports the profile an invite belongs to and who is connected,
 	// without using the invite up.
 	Status(ctx context.Context, code InviteCode) (Status, error)
@@ -40,7 +45,7 @@ type service struct {
 	invites  Invites
 	oauth    OAuth
 	identity Identity
-	now      func() time.Time
+	clock    Clock
 
 	mu      sync.Mutex
 	pending map[string]pendingLogin // by OAuth state
@@ -55,10 +60,9 @@ type pendingLogin struct {
 }
 
 // NewService returns a Service using the given ports.
-func NewService(tokens Tokens, invites Invites, oauth OAuth, identity Identity, opts ...Option) Service {
+func NewService(tokens Tokens, invites Invites, oauth OAuth, identity Identity, clock Clock) Service {
 	return &service{
-		tokens: tokens, invites: invites, oauth: oauth, identity: identity,
-		now:     apply(opts).now,
+		tokens: tokens, invites: invites, oauth: oauth, identity: identity, clock: clock,
 		pending: map[string]pendingLogin{},
 	}
 }
@@ -112,6 +116,26 @@ func (c callback) Nonce() string        { return c.nonce }
 func (c callback) Code() string         { return c.code }
 func (c callback) SpotifyError() string { return c.spotifyError }
 
+func (s *service) CreateInvite(ctx context.Context, id ProfileID, ttl time.Duration) (InviteCode, time.Time, error) {
+	if id == nil {
+		return nil, time.Time{}, errors.New("invite needs a profile")
+	}
+	if ttl <= 0 {
+		return nil, time.Time{}, fmt.Errorf("invite TTL must be positive, got %s", ttl)
+	}
+	code := newInviteCode()
+	now := s.clock.Now()
+	inv := &invite{hash: hashInvite(code), profileID: id, expires: now.Add(ttl)}
+	// Expired invites are removed here, so the store doesn't keep growing.
+	if err := s.invites.PruneInvites(ctx, now); err != nil {
+		return nil, time.Time{}, fmt.Errorf("prune invites: %w", err)
+	}
+	if err := s.invites.AddInvite(ctx, inv); err != nil {
+		return nil, time.Time{}, fmt.Errorf("save invite: %w", err)
+	}
+	return code, inv.expires, nil
+}
+
 func (s *service) Status(ctx context.Context, code InviteCode) (Status, error) {
 	inv, err := s.checkInvite(ctx, code)
 	if err != nil {
@@ -130,7 +154,7 @@ func (s *service) StartLogin(ctx context.Context, code InviteCode) (Login, error
 		return nil, err
 	}
 	state, nonce, verifier := randomString(), randomString(), randomString()
-	now := s.now()
+	now := s.clock.Now()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -157,7 +181,7 @@ func (s *service) FinishLogin(ctx context.Context, cb Callback) (Profile, error)
 	p, ok := s.pending[cb.State()]
 	delete(s.pending, cb.State())
 	s.mu.Unlock()
-	if !ok || s.now().After(p.expires) || subtle.ConstantTimeCompare([]byte(cb.Nonce()), []byte(p.nonce)) != 1 {
+	if !ok || s.clock.Now().After(p.expires) || subtle.ConstantTimeCompare([]byte(cb.Nonce()), []byte(p.nonce)) != 1 {
 		return nil, ErrLoginExpired
 	}
 	if cb.SpotifyError() == "access_denied" {
@@ -180,7 +204,7 @@ func (s *service) FinishLogin(ctx context.Context, cb Callback) (Profile, error)
 	if err != nil {
 		return nil, fmt.Errorf("look up account: %w", err)
 	}
-	c, err := NewConnection(tok, acc, s.now())
+	c, err := NewConnection(tok, acc, s.clock.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +252,7 @@ func (s *service) validInvite(inv Invite, err error) (Invite, error) {
 		return nil, fmt.Errorf("load invite: %w", err)
 	case inv == nil || inv.ProfileID() == nil:
 		return nil, errors.New("load invite: repository returned an incomplete invite")
-	case s.now().After(inv.Expires()):
+	case s.clock.Now().After(inv.Expires()):
 		return nil, ErrInvalidInvite
 	}
 	return inv, nil
