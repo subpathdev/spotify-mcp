@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>{{.Title}}</title>
+<style>
+:root { color-scheme: light dark; --bg:#f6f7f6; --card:#fff; --fg:#1b1f1c; --muted:#5c665f; --accent:#1db954; --accent-fg:#06200f; --err:#b3261e; --line:#d9ded9; }
+@media (prefers-color-scheme: dark) { :root { --bg:#111412; --card:#1b1f1c; --fg:#e8ece9; --muted:#a3ada6; --line:#2d332f; --err:#f2b8b5; } }
+* { box-sizing: border-box; }
+body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; padding:16px; }
+main { width:100%; max-width:420px; background:var(--card); border:1px solid var(--line); border-radius:16px; padding:28px 24px; }
+h1 { font-size:1.4rem; margin:0 0 12px; }
+p { margin:0 0 16px; color:var(--muted); }
+p.err { color:var(--err); }
+.status { padding:12px 14px; border-radius:10px; border:1px solid var(--line); margin-bottom:20px; color:var(--fg); }
+button { width:100%; font:inherit; font-weight:600; border:0; border-radius:999px; padding:14px; cursor:pointer; }
+.primary { background:var(--accent); color:var(--accent-fg); }
+.secondary { background:transparent; color:var(--muted); border:1px solid var(--line); margin-top:12px; }
+form { margin:0; }
+</style>
+</head>
+<body>
+<main>
+<h1>{{.Title}}</h1>
+{{if .Message}}<p{{if .Error}} class="err"{{end}}>{{.Message}}</p>{{end}}
+{{if .ShowForm}}
+  {{if .Connected}}
+  <div class="status">Connected as <strong>{{.Name}}</strong>{{if .Since}} since {{.Since}}{{end}}.</div>
+  {{else}}
+  <p>Press the button and log in with your Spotify account. Afterwards Claude can play, pause and skip music for you. It can't see your playlists or e-mail address.</p>
+  {{end}}
+  <form method="post" action="/connect">
+    <input type="hidden" name="invite" value="{{.Invite}}">
+    <button class="primary" name="action" value="connect">{{if .Connected}}Connect a different account{{else}}Connect Spotify{{end}}</button>
+    {{if .Connected}}<button class="secondary" name="action" value="disconnect">Disconnect</button>{{end}}
+  </form>
+{{end}}
+</main>
+</body>
+</html>

@@ -1,0 +1,208 @@
+package filestore
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/subpathdev/spotify-mcp/internal/account"
+)
+
+var profile = mustProfileID("default")
+
+// mustProfileID parses a profile ID that the test knows to be valid.
+func mustProfileID(s string) account.ProfileID {
+	id, err := account.ParseProfileID(s)
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+// testInvite is a valid invite whose hash is n in hex.
+func testInvite(t *testing.T, n int, expires time.Time) account.Invite {
+	t.Helper()
+	inv, err := account.RestoreInvite(fmt.Sprintf("%064x", n), "default", expires)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return inv
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+func testConnection(refresh string) account.Connection {
+	return must(account.NewConnection(
+		must(account.NewToken("a", refresh, time.Date(2026, 11, 22, 13, 0, 0, 0, time.UTC))),
+		must(account.NewSpotifyAccount("jan", "Jan")),
+		time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC),
+	))
+}
+
+func open(t *testing.T, dir string) Store {
+	t.Helper()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestConnectionRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s := open(t, dir)
+	if _, err := s.Connection(ctx, profile); !errors.Is(err, account.ErrNotFound) {
+		t.Fatalf("empty store: %v", err)
+	}
+	want := testConnection("r")
+	if err := s.SaveConnection(ctx, profile, want); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(filepath.Join(dir, "tokens", "default.json"))
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("token file: %v %v", fi, err)
+	}
+	// A second store on the same dir, as after a pod restart, sees it.
+	got, err := open(t, dir).Connection(ctx, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gt, wt := got.Token(), want.Token()
+	if gt.AccessToken() != wt.AccessToken() || gt.RefreshToken() != wt.RefreshToken() || !gt.Expiry().Equal(wt.Expiry()) ||
+		got.Account().ID() != "jan" || got.Account().DisplayName() != "Jan" || !got.ConnectedAt().Equal(want.ConnectedAt()) {
+		t.Fatalf("round trip changed the connection: %v %v %v", gt.Expiry(), got.Account().Name(), got.ConnectedAt())
+	}
+	for range 2 {
+		if err := s.DeleteConnection(ctx, profile); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestUpdateConnection(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, t.TempDir())
+	noop := func(c account.Connection) (account.Connection, error) { return c, nil }
+	if err := s.UpdateConnection(ctx, profile, noop); !errors.Is(err, account.ErrNotFound) {
+		t.Fatalf("missing: %v", err)
+	}
+	_ = s.SaveConnection(ctx, profile, testConnection("r1"))
+	boom := errors.New("boom")
+	err := s.UpdateConnection(ctx, profile, func(account.Connection) (account.Connection, error) {
+		return testConnection("lost"), boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("fn error: %v", err)
+	}
+	if c, _ := s.Connection(ctx, profile); c.Token().RefreshToken() != "r1" {
+		t.Fatalf("failed update was written: %+v", c)
+	}
+}
+
+func TestRejectsBadInput(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s := open(t, dir)
+	if err := s.SaveConnection(ctx, account.ProfileID{}, testConnection("r")); err == nil {
+		t.Fatal("nil profile accepted")
+	}
+	if err := s.SaveConnection(ctx, profile, nil); err == nil {
+		t.Fatal("nil connection accepted")
+	}
+	// A damaged file is an error, not a half-empty connection.
+	if err := os.WriteFile(filepath.Join(dir, "tokens", "default.json"), []byte(`{"refresh_token":"r"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Connection(ctx, profile); err == nil || errors.Is(err, account.ErrNotFound) {
+		t.Fatalf("file without account: %v", err)
+	}
+}
+
+func TestInviteTakenOnce(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s := open(t, dir)
+	inv := testInvite(t, 1, time.Now().Add(time.Hour))
+	if err := s.AddInvite(ctx, inv); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Invite(ctx, inv.Hash()); err != nil || got.ProfileID() != profile || got.Hash() != inv.Hash() {
+		t.Fatalf("invite: %+v %v", got, err)
+	}
+
+	// Half go through a second Store, like the invite command's process.
+	other := open(t, dir)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	taken := 0
+	for i := range 20 {
+		st := s
+		if i%2 == 1 {
+			st = other
+		}
+		wg.Go(func() {
+			if _, err := st.TakeInvite(ctx, inv.Hash()); err == nil {
+				mu.Lock()
+				taken++
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+	if taken != 1 {
+		t.Fatalf("taken %d times, want once", taken)
+	}
+}
+
+func TestConcurrentInvitesFromTwoStores(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	a, b := open(t, dir), open(t, dir)
+	var wg sync.WaitGroup
+	for i := range 20 {
+		st := a
+		if i%2 == 1 {
+			st = b
+		}
+		wg.Go(func() {
+			if err := st.AddInvite(ctx, testInvite(t, i, time.Now().Add(time.Hour))); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	for i := range 20 {
+		if _, err := a.Invite(ctx, testInvite(t, i, time.Now()).Hash()); err != nil {
+			t.Errorf("invite %d lost: %v", i, err)
+		}
+	}
+}
+
+func TestPruneInvites(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, t.TempDir())
+	now := time.Now()
+	old, cur := testInvite(t, 1, now.Add(-time.Minute)), testInvite(t, 2, now.Add(time.Minute))
+	_ = s.AddInvite(ctx, old)
+	_ = s.AddInvite(ctx, cur)
+	if err := s.PruneInvites(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Invite(ctx, old.Hash()); !errors.Is(err, account.ErrNotFound) {
+		t.Fatalf("expired invite kept: %v", err)
+	}
+	if _, err := s.Invite(ctx, cur.Hash()); err != nil {
+		t.Fatalf("valid invite pruned: %v", err)
+	}
+}
