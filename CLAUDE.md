@@ -21,10 +21,19 @@ Jan reads this code as production Go, even for a home project. Follow these from
 - **Each layer owns its types and maps them explicitly** at every boundary: wire types, DB rows/columns, file formats. Never pass storage or generated types across a layer, and never `json.Marshal` domain types into a column.
 - **Interfaces between layers**, defined by the consumer and kept small. A new capability gets a new or composed interface instead of a bigger one.
 - **Exported interface, unexported implementation:** `type DB interface{…}`, `type db struct{…}`, `func Open(…) (DB, error)`.
-- **Values that carry a rule or a secret** (IDs, names, keys, codes, tokens) are an exported interface over an unexported struct, created only by a validating constructor (`Parse…`/`New…`), plus `Restore…` for trusted stored data. No bare `string` types callers can forge. Compare through methods, not `==` on interface values.
 - **Methods on types**, not free functions that all take the same dependency.
 - **Typed values** (dates, enums, durations) instead of strings and ints; inject a clock instead of calling `time.Now()` in the domain.
 - **Generated code** lives in its own package and is never edited by hand. HTTP APIs are spec-first (OpenAPI + oapi-codegen) where the repo has a spec.
+
+### Values, entities and constructors
+
+- No exported named basic types (`type ProfileID string`) for values that carry a rule or a secret: they can be created by plain conversion and skip validation.
+- Values and entities with a rule or a secret are an exported interface with an unexported implementation, created only through functions that validate (`ParseX`, `NewX`, `RestoreX` for adapters reading storage). Seal value interfaces with an unexported marker method; keep a defensive check where a value ends up in a file name or key.
+- Entities passed between layers are interfaces too, not exported structs with open fields. Services and adapters: `NewX` returns an exported interface (or the port it implements).
+- No exported mutable globals for rules (scope lists, kind lists): use functions that return a copy.
+- Secrets print as redacted (`String()`), and logs pass explicit strings (slog's JSON handler doesn't call `String()`).
+- Fine to keep: sentinel errors and error types (`errors.Is/As`), functional options, plain config/input structs with no rule. Say so explicitly when keeping one.
+- Don't copy an existing `type X string` pattern from a codebase; flag it.
 
 ### Tests and verification
 
